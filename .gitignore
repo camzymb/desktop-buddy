@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+
+# Environment variables (KEEP SECRETS OUT OF GITHUB!)
+.env
+.env.local
+*.key
+credentials.json
+token.json
+
+# OS files
+.DS_Store
+Thumbs.db
+*.swp
+
+# IDE
+.vscode/
+.idea/
+
+# Audacity project files (we only commit the exported MP3s)
+*.aup3
+*.aup3-shm
+*.aup3-wal
+
+# Logs
+*.log
