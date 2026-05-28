@@ -8,12 +8,19 @@ venv/
 env/
 .venv/
 
-# Environment variables (KEEP SECRETS OUT OF GITHUB!)
+# Secrets, credentials & personal data (KEEP PRIVATE DATA OUT OF GITHUB!)
+# Real values live in a local .env; commit only .env.example with placeholders.
 .env
-.env.local
+.env.*
+!.env.example
 *.key
+*.pem
 credentials.json
+credentials*.json
 token.json
+token*.json
+client_secret.json
+client_secret*.json
 
 # OS files
 .DS_Store
