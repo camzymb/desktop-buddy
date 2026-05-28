@@ -179,6 +179,28 @@ body {
   background: #fff;
   border-radius: 14px;
   padding: 9px 12px;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.event:focus-visible {
+  outline: 2px solid var(--pink-frame);
+  outline-offset: 2px;
+}
+
+/* Done events: gentle strike-through + fade, matching ticked to-do items.
+   Applied on click and automatically for events that have already ended. */
+.event.done {
+  opacity: 0.65;
+}
+
+.event.done .event-name {
+  color: var(--text-soft);
+  text-decoration: line-through;
+}
+
+.event.done .event-time {
+  color: var(--text-soft);
 }
 
 .event-icon {
@@ -195,6 +217,16 @@ body {
   color: var(--pink-frame);
   font-weight: 500;
   white-space: nowrap;
+}
+
+/* Friendly single-line message (e.g. "Nothing today" or a sync error).
+   Not interactive, so it keeps the default cursor. */
+.event-message {
+  justify-content: center;
+  text-align: center;
+  color: var(--text-soft);
+  font-size: 0.95rem;
+  cursor: default;
 }
 
 /* === TASK LISTS (shared by Must-Do and Goals) === */

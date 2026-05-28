@@ -43,10 +43,12 @@
 
       <div class="callout-grid">
 
-        <!-- === Today's Events === -->
+        <!-- === Today's Events ===
+             Sample rows below are a fallback; script.js replaces them with
+             real Google Calendar events when served by callout_server.py. -->
         <section class="panel panel--events">
           <h2 class="panel-title">Today's Events</h2>
-          <ul class="event-list">
+          <ul class="event-list" id="event-list">
             <li class="event">
               <span class="event-icon" aria-hidden="true">📚</span>
               <span class="event-name">Coursera lesson</span>

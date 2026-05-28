@@ -64,11 +64,16 @@ class CalendarSyncError(Exception):
 
 @dataclass(frozen=True)
 class CalendarEvent:
-    """One calendar event, with start/end already formatted for display."""
+    """One calendar event, with start/end already formatted for display.
+
+    `past` is True when the event's end time is already behind us (used to
+    show finished events as done). All-day events are never marked past.
+    """
     title: str
     start: str
     end: str
     all_day: bool
+    past: bool
 
 
 # === AUTHENTICATION ===
@@ -181,13 +186,16 @@ def _to_event(item: dict) -> CalendarEvent:
 
     # All-day events carry a "date" instead of a "dateTime".
     if "date" in start:
-        return CalendarEvent(title=title, start="All day", end="All day", all_day=True)
+        return CalendarEvent(
+            title=title, start="All day", end="All day", all_day=True, past=False
+        )
 
     return CalendarEvent(
         title=title,
         start=_format_time(start["dateTime"]),
         end=_format_time(end["dateTime"]),
         all_day=False,
+        past=_has_passed(end["dateTime"]),
     )
 
 
@@ -195,6 +203,12 @@ def _format_time(iso_datetime: str) -> str:
     """Format an ISO datetime string as a local clock time, e.g. "2:00 PM"."""
     local_time = datetime.fromisoformat(iso_datetime).astimezone()
     return local_time.strftime(TIME_FORMAT)
+
+
+def _has_passed(iso_datetime: str) -> bool:
+    """Return True if the given ISO datetime is already in the past."""
+    end_time = datetime.fromisoformat(iso_datetime).astimezone()
+    return end_time < datetime.now().astimezone()
 
 
 # === TEST ENTRY POINT ===
@@ -214,7 +228,8 @@ def _print_todays_events() -> None:
     print(f"Today's events ({len(events)}):")
     for event in events:
         when = "all day" if event.all_day else f"{event.start} – {event.end}"
-        print(f"  • {event.title} — {when}")
+        done_marker = " ✓ done" if event.past else ""
+        print(f"  • {event.title} — {when}{done_marker}")
 
 
 if __name__ == "__main__":
