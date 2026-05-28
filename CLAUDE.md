@@ -1,85 +1,68 @@
 # Desktop Buddy — Project Standards
 
-This file encodes the permanent standards for the `desktop-buddy` project. Any Claude Code session working in this repo should read this file first and follow these standards without needing to be reminded.
+Engineering standards and conventions for the `desktop-buddy` project. This file is the
+source of truth for code quality, security, and structure; read it before contributing.
 
----
+## Overview
 
-## 1. Code Quality
+Desktop Buddy is a desktop companion for Linux (Pop!_OS / COSMIC, Wayland): an illustrated
+character that walks along the screen, surfaces gentle reminders in speech bubbles with voice
+playback, and presents a daily summary of calendar events. It runs as a transparent,
+always-on-top overlay.
 
-- **Portfolio-grade readability.** This repo will be reviewed by recruiters. When in doubt, optimize for a stranger skimming the file on GitHub.
-- **Section headers** in every `.py` file using `# === SECTION NAME ===`. Common sections: `IMPORTS`, `CONSTANTS`, `ENUMS`, `SPRITE CONFIG`, the main class(es), `ENTRY POINT`. Inside a long class, use `# --- subsection ---` to break up groups of methods.
-- **Constants at the top.** All tunable values (speeds, intervals, sizes, paths) live at the top of the file with a one-or-two-line comment explaining what each one does and what changes when you tweak it. No magic numbers buried in the code.
-- **Docstrings.** Every function, method, and class gets a docstring in plain English explaining its purpose. Module-level docstring at the top of every `.py` file describing what the file is for.
-- **Descriptive variable names.** No `x`, `t`, `n`, `tmp`. Use `position_x`, `elapsed_ms`, `step_count`, `candidate_x`. Single-letter names are allowed *only* for trivial loop counters (`for i in range(...)`).
-- **Type hints** on function signatures and non-obvious variables. Use modern Python syntax (`list[str]`, `dict[str, int]`, `tuple[float, float]`).
-- **No leftover debug prints.** When debugging, wrap diagnostic output behind a `DEBUG = False` constant at the top, or remove the prints before committing. Never commit code with raw `print()` statements left in from a debugging session.
-- **Comments earn their place.** Comment on *why*, not *what*. Skip comments that just restate what the code obviously does. Keep comments when they explain a non-obvious workaround, a subtle invariant, or a "why we picked this number" that a reader would otherwise have to guess.
+**Tech stack:** Python 3, PyQt6 (overlay & rendering), pygame-ce (audio), Google Calendar API
+(read-only). A small HTML/CSS/JS module renders the daily-summary card. Planned: Claude API for
+dynamic messages and further context-aware reminders.
 
-## 2. Security & Privacy (Public Repo)
+## Code Quality
 
-This is a **public** GitHub repository. The *code* is meant to be public (it showcases Camille's work); **none of Camille's private personal data may ever be committed or pushed.** These rules are permanent and apply to every chunk.
+- **Section headers** in every `.py` file (`# === SECTION NAME ===`); group related methods
+  with `# --- subsection ---`.
+- **Tunable constants at the top** of the file, each with a short comment — no magic numbers
+  buried in code.
+- **Docstrings** on every module, class, and function, in plain English.
+- **Type hints** on signatures and non-obvious variables; modern syntax (`list[str]`,
+  `tuple[float, float]`).
+- **Descriptive names** — no single-letter identifiers except trivial loop counters.
+- **No leftover debug prints** — gate diagnostics behind a `DEBUG` flag or remove them.
+- **Comments explain *why*, not *what*** — reserve them for non-obvious decisions.
+- Favor readability: one well-organized module over premature abstraction; split a file into
+  focused modules once it grows unwieldy.
 
-**Never commit or push:**
-- Real Google Calendar events or any calendar data
-- Gmail messages, email content, or email addresses
-- Notion content
-- API keys, OAuth tokens, client secrets, or passwords
-- Credential files: `credentials.json`, `token.json`, `client_secret.json`, etc.
-- Any `.env` file
-- Any file containing Camille's personal information
+## Security & Privacy
 
-**Rules:**
-- **Load secrets from a local `.env` file or environment variables — never hard-code them** in any committed file.
-- **`.env` and all credential/token files must always be listed in `.gitignore`** and never committed.
-- **Never log or print full secrets** to the terminal or console.
-- **Personal data stays local.** When we build the Google Calendar / Gmail / Notion integrations, all OAuth tokens and fetched personal data live only on Camille's machine — never pushed to the repo.
-- **Only these things go public:** source code, non-sensitive assets (`sprites/`, `sounds/`), the README, and config *templates* with placeholder values.
-- **Example configs use fake placeholders** (e.g. `YOUR_API_KEY_HERE`) in a file named `.env.example` — never put real values in any committed file.
-- **Before any commit or push, verify nothing sensitive is staged** (no secrets, credentials, tokens, or personal data).
+This is a public repository. Source code is public; private data never is.
 
-## 3. Project Structure
+- **Never commit** secrets or personal data: API keys, OAuth tokens, client secrets, passwords,
+  credential files (`credentials.json`, `token.json`, `client_secret*.json`), `.env` files, or
+  any fetched personal data (calendar, email, etc.).
+- **Load secrets from environment variables or a local `.env`** — never hard-code them. Commit
+  only `.env.example` with placeholder values.
+- **Keep all credential and token files gitignored**; verify nothing sensitive is staged before
+  each commit.
+- **Least privilege** — request read-only scopes for external APIs (e.g. Google Calendar
+  `calendar.readonly`).
+- **Keep personal data local** — fetched data is shown only to the user (e.g. served on
+  localhost) and is never written into the repo or exposed on the network.
+- **Never log full secrets** to the console.
 
-- **`main.py` is the entry point.** Running `python main.py` (from the activated venv) always launches the buddy.
-- **Split files when they earn it.** If `main.py` grows past ~400-500 lines and the sections start to feel crowded, split into logical modules — typical candidates: `buddy_window.py` (the overlay + sprite class), `movement.py` (walking and destination logic), `animation.py` (frame swapping), `constants.py` (the tunable knobs). Don't split prematurely; one well-sectioned file beats four files of indirection.
-- **Assets:** sprites live in `sprites/` (PNGs with transparent backgrounds), sounds live in `sounds/` (MP3s).
-- **Virtual environment:** `.venv/` at the project root, already in `.gitignore`. All Python work happens inside it. `requirements.txt` is kept up to date via `pip freeze`.
-- **Secrets & private data:** governed by the Security & Privacy section above — `.env`, credential files, and tokens are always gitignored, and never commit anything that looks like an API key or personal data.
+## Project Structure
 
-## 4. Workflow
+- **Entry point:** `main.py` launches the buddy.
+- **Modules:** focused, single-responsibility files (e.g. `calendar_sync.py`,
+  `speech_bubble.py`, `audio.py`, `quotes.py`).
+- **Assets:** sprites in `sprites/`, sounds in `sounds/`, bundled fonts in `assets/fonts/`
+  (with their licenses).
+- **Daily-summary UI:** `callout/` (standalone HTML/CSS/JS), served locally by
+  `callout_server.py`.
+- **Secrets (gitignored):** `credentials.json`, `token.json`, `.env`.
+- **Environment:** a project-local virtualenv (`.venv/`); dependencies pinned in
+  `requirements.txt`.
 
-- **Plan before significant code changes.** Before touching code on any non-trivial change (new feature, refactor, debugging a behavior issue), describe the plan in plain language and wait for approval. Small tweaks (bumping a constant, fixing a typo) don't need this.
-- **Run after implementing.** After making changes, launch the script so Camille can verify the behavior visually. Don't claim a feature works without seeing it work.
-- **Commit messages follow the pattern `Chunk X: brief description`** (e.g., `Chunk B: floor-walking with distance-synced animation`). Use a single short subject line; a paragraph body is fine when it adds context.
-- **Don't push until visual confirmation.** Local commits are fine; `git push` only after Camille has confirmed the change works on screen.
-- **Risky actions need confirmation.** Force-push, destructive resets, dropping branches, pushing directly to `main` — pause and confirm even if the action seems obvious.
+## Conventions
 
-## 5. Project Context
-
-- **What this is:** A desktop AI companion. A chibi-style girl character who eventually nudges the user about meetings, emails, and other reminders, with personality powered by Claude.
-- **Environment:** Pop!_OS 24.04 LTS, COSMIC desktop (Wayland-based). Code should not rely on X11-only behaviors. **Notable constraints learned the hard way:**
-  - Wayland compositors refuse client-side window repositioning, which is why the buddy lives on a fullscreen transparent overlay with `setMask()` for click-through (the sprite is repositioned *inside* the overlay).
-  - The `Qt.WindowType.Tool` flag is required to get true always-on-top + hidden-from-taskbar behavior, but the compositor decides the overlay's actual size and may give us a smaller rect than we asked for. **Coordinate math must use `self.width()` / `self.height()` at runtime, not the screen size,** so the buddy stays inside whatever overlay we actually got.
-- **Tech stack (current):** Python 3, PyQt6.
-- **Tech stack (planned):** `pygame` or similar for sound playback, the Anthropic Claude API for dynamic messages, Google Calendar API and Gmail API for context-aware reminders, autostart-on-login integration with COSMIC.
-- **Who Camille is:** A digital marketer, not a professional programmer. She is learning AI-assisted development by building this project. **Explain technical decisions in plain language.** She reviews code by *running it and watching what it does*, not by reading it line by line — so behavior over claims, always.
-
-## 6. Character Behavior (Current Model)
-
-- **Floor physics:** The buddy walks along the bottom of the screen, treated as a floor. Her feet are anchored to a fixed `ground_y` line; only X position changes during a walk.
-- **Distance-synced animation:** Leg-swap frames are triggered by distance traveled (`STRIDE_PX`), not by an elapsed-time timer. This keeps her gait visually anchored to motion — no "ice-skating" effect.
-- **Wandering pattern:** Pick a random X far enough away to be a real trip (`MIN_TRIP_DISTANCE_PX`), walk to it at `SPEED_PX` per movement tick, pause for 2-3 seconds in the idle pose, then pick the next destination.
-- **Spawn:** Bottom-right corner on launch.
-- **Direction sprites:** Four-frame walk cycles for LEFT and RIGHT only (no vertical movement at the moment). Uses the clean side-profile frames in order `walk_*_2 → _3 → _5 → _6.png`, advanced one frame per `STRIDE_PX` traveled. Frames `_1` and `_4` exist in `sprites/` but are intentionally skipped — they are high-knee poses with the head turned backward, which reads as a direction flip. Idle pose is `idle_front.png`.
-- **Always-on-top transparent overlay** that does not block clicks on other windows (input mask sized to the sprite rect).
-- **Escape closes** the app (requires the overlay to have keyboard focus — clicking the buddy gives it focus).
-
-## 7. Coming Chunks (Roadmap)
-
-- **Chunk C:** Speech bubbles (rendered above the buddy's head).
-- **Chunk D:** Sound effects (`sounds/voice_*.mp3` and `sounds/pop.mp3`), triggered by events.
-- **Chunk E:** Claude API integration — dynamic personalized messages.
-- **Chunk F:** Google Calendar integration — meeting reminders.
-- **Chunk G:** Gmail integration — new-email nudges.
-- **Chunk H:** Autostart-on-login for COSMIC / GNOME.
-
-Each chunk follows the standard workflow in Section 4: plan → approve → implement → run → confirm → commit → (eventually) push.
+- Plan non-trivial changes before implementing; verify behavior by running the app, not just by
+  inspecting code.
+- Write clear, descriptive commit messages.
+- Create new commits rather than amending published history; confirm before any destructive or
+  irreversible git operation.
