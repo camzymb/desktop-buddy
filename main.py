@@ -37,10 +37,12 @@ EDGE_MARGIN_PX = 20
 MOVE_TICK_MS = 33
 SPEED_PX = 2.5
 
-# Distance the buddy must travel between leg-swaps. Tied to actual motion
-# (NOT a timer), which is what makes the gait look anchored to the ground
-# instead of her legs flipping in place while her body slides.
-STRIDE_PX = 35
+# Distance the buddy must travel before advancing to the next walk frame.
+# Tied to actual motion (NOT a timer), which is what makes the gait look
+# anchored to the ground instead of her legs flipping in place while her
+# body slides. With a 2-frame cycle, ~40px per swap reads as a natural step
+# length rather than a frantic shuffle.
+STRIDE_PX = 40
 
 # How long she stands still in the idle pose after reaching a destination
 # before picking the next one.
@@ -71,11 +73,15 @@ class State(Enum):
 # The pose shown when standing still between walks.
 IDLE_SPRITE: str = "idle_front.png"
 
-# Two-frame walk cycles for each facing direction. The buddy alternates
-# between frame A and frame B as she covers ground.
-DIRECTION_FRAMES: dict[Direction, tuple[str, str]] = {
-    Direction.RIGHT: ("walk_right_a.png", "walk_right_b.png"),
-    Direction.LEFT:  ("walk_left_a.png",  "walk_left_b.png"),
+# Two-frame walk cycles for each facing direction. We deliberately use only
+# the clean side-profile frames (2 and 4) and skip frames 1 and 3, which show
+# the character turning her head over her shoulder — those read as a glitchy
+# direction "flip" mid-walk. Frames 2 and 4 have clearly different leg
+# positions, so alternating them still animates a natural stride while she
+# stays facing the correct way.
+DIRECTION_FRAMES: dict[Direction, tuple[str, ...]] = {
+    Direction.RIGHT: ("walk_right_2.png", "walk_right_4.png"),
+    Direction.LEFT:  ("walk_left_2.png",  "walk_left_4.png"),
 }
 
 # Preloaded but not used by Chunk B (which is left/right only along the
@@ -161,9 +167,8 @@ class BuddyOverlay(QWidget):
         here at startup rather than mid-feature.
         """
         filenames: set[str] = {IDLE_SPRITE, *RESERVED_SPRITES}
-        for frame_a, frame_b in DIRECTION_FRAMES.values():
-            filenames.add(frame_a)
-            filenames.add(frame_b)
+        for direction_frames in DIRECTION_FRAMES.values():
+            filenames.update(direction_frames)
 
         scaled_pixmaps: dict[str, QPixmap] = {}
         for filename in filenames:
@@ -267,13 +272,14 @@ class BuddyOverlay(QWidget):
         self._feet_x += step
         self._distance_since_last_step += SPEED_PX
 
-        # Stride-based animation: only swap legs once we've covered enough
-        # ground. This keeps the gait visually anchored to her motion.
+        # Stride-based animation: only advance the walk cycle once we've
+        # covered enough ground. This keeps the gait visually anchored to her
+        # motion. The index wraps through the direction's frames in order.
         if self._distance_since_last_step >= STRIDE_PX:
             self._distance_since_last_step -= STRIDE_PX
-            self._frame_index = 1 - self._frame_index
-            next_frame = DIRECTION_FRAMES[self._direction][self._frame_index]
-            self._show_sprite(next_frame)
+            walk_frames = DIRECTION_FRAMES[self._direction]
+            self._frame_index = (self._frame_index + 1) % len(walk_frames)
+            self._show_sprite(walk_frames[self._frame_index])
         else:
             self._reposition_sprite()
 

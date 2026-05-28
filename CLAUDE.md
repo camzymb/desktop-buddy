@@ -47,7 +47,7 @@ This file encodes the permanent standards for the `desktop-buddy` project. Any C
 - **Distance-synced animation:** Leg-swap frames are triggered by distance traveled (`STRIDE_PX`), not by an elapsed-time timer. This keeps her gait visually anchored to motion — no "ice-skating" effect.
 - **Wandering pattern:** Pick a random X far enough away to be a real trip (`MIN_TRIP_DISTANCE_PX`), walk to it at `SPEED_PX` per movement tick, pause for 2-3 seconds in the idle pose, then pick the next destination.
 - **Spawn:** Bottom-right corner on launch.
-- **Direction sprites:** Two-frame walk cycles for LEFT and RIGHT only (no vertical movement at the moment). `walk_left_a/b.png` and `walk_right_a/b.png`. Idle pose is `idle_front.png`.
+- **Direction sprites:** Two-frame walk cycles for LEFT and RIGHT only (no vertical movement at the moment). Uses the clean side-profile frames `walk_left_2/4.png` and `walk_right_2/4.png`, advanced one frame per `STRIDE_PX` traveled. Frames `_1` and `_3` exist in `sprites/` but are intentionally skipped — they show a head-turn that reads as a direction flip. Idle pose is `idle_front.png`.
 - **Always-on-top transparent overlay** that does not block clicks on other windows (input mask sized to the sprite rect).
 - **Escape closes** the app (requires the overlay to have keyboard focus — clicking the buddy gives it focus).
 
