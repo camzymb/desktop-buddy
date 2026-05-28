@@ -40,9 +40,9 @@ SPEED_PX = 2.5
 # Distance the buddy must travel before advancing to the next walk frame.
 # Tied to actual motion (NOT a timer), which is what makes the gait look
 # anchored to the ground instead of her legs flipping in place while her
-# body slides. With a 2-frame cycle, ~40px per swap reads as a natural step
-# length rather than a frantic shuffle.
-STRIDE_PX = 40
+# body slides. With a 4-frame cycle, ~28px per frame lets all four poses get
+# their turn over a natural step rather than only the first one or two showing.
+STRIDE_PX = 28
 
 # How long she stands still in the idle pose after reaching a destination
 # before picking the next one.
@@ -73,16 +73,29 @@ class State(Enum):
 # The pose shown when standing still between walks.
 IDLE_SPRITE: str = "idle_front.png"
 
-# Two-frame walk cycles for each facing direction. We deliberately use only
-# the clean side-profile frames (2 and 4) and skip frames 1 and 3, which show
-# the character turning her head over her shoulder — those read as a glitchy
-# direction "flip" mid-walk. Frames 2 and 4 have clearly different leg
-# positions, so alternating them still animates a natural stride while she
-# stays facing the correct way.
+# Four-frame walk cycles for each facing direction, advanced in order as the
+# buddy covers ground (2 → 3 → 5 → 6 → loop). We deliberately skip frames 1
+# and 4 of each set: those are high-knee poses where the character's head is
+# turned backward, which reads as a glitchy direction "flip" mid-walk. The
+# remaining frames keep her head facing her direction of travel throughout.
 DIRECTION_FRAMES: dict[Direction, tuple[str, ...]] = {
-    Direction.RIGHT: ("walk_right_2.png", "walk_right_4.png"),
-    Direction.LEFT:  ("walk_left_2.png",  "walk_left_4.png"),
+    Direction.RIGHT: (
+        "walk_right_2.png", "walk_right_3.png",
+        "walk_right_5.png", "walk_right_6.png",
+    ),
+    Direction.LEFT: (
+        "walk_left_2.png", "walk_left_3.png",
+        "walk_left_5.png", "walk_left_6.png",
+    ),
 }
+
+# Unused — head-turn frames (high-knee poses with the head facing backward).
+# Kept in sprites/ and loaded at startup so the asset pipeline stays intact,
+# but intentionally excluded from the walk cycle above.
+UNUSED_HEAD_TURN_FRAMES: tuple[str, ...] = (
+    "walk_right_1.png", "walk_right_4.png",
+    "walk_left_1.png",  "walk_left_4.png",
+)
 
 # Preloaded but not used by Chunk B (which is left/right only along the
 # floor). Front- and back-facing walk cycles are reserved for a future
@@ -162,11 +175,11 @@ class BuddyOverlay(QWidget):
     def _load_pixmaps(self) -> dict[str, QPixmap]:
         """Load every sprite we may use, each pre-scaled to BUDDY_HEIGHT_PX tall.
 
-        Includes the reserved front/back walking frames so future chunks
-        don't have to revisit the asset pipeline; missing files fail loudly
-        here at startup rather than mid-feature.
+        Includes the reserved front/back walking frames and the unused
+        head-turn frames so the asset pipeline stays intact and any missing
+        file fails loudly here at startup rather than mid-feature.
         """
-        filenames: set[str] = {IDLE_SPRITE, *RESERVED_SPRITES}
+        filenames: set[str] = {IDLE_SPRITE, *RESERVED_SPRITES, *UNUSED_HEAD_TURN_FRAMES}
         for direction_frames in DIRECTION_FRAMES.values():
             filenames.update(direction_frames)
 
@@ -257,7 +270,7 @@ class BuddyOverlay(QWidget):
     # --- movement loop ---
 
     def _on_move_tick(self) -> None:
-        """Advance position toward target each tick; swap legs every STRIDE_PX traveled."""
+        """Advance position toward target each tick; step the walk frame every STRIDE_PX traveled."""
         distance_remaining = self._target_x - self._feet_x
 
         # Arrived (or close enough): snap exactly and start the rest.
