@@ -16,7 +16,14 @@ from enum import Enum, auto
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QGuiApplication, QKeyEvent, QPixmap, QRegion, QShowEvent
+from PyQt6.QtGui import (
+    QGuiApplication,
+    QKeyEvent,
+    QPixmap,
+    QRegion,
+    QResizeEvent,
+    QShowEvent,
+)
 from PyQt6.QtWidgets import QApplication, QLabel, QWidget
 
 
@@ -155,12 +162,19 @@ class BuddyOverlay(QWidget):
     def _configure_window(self) -> None:
         """Make the window frameless, transparent, always on top, and overlay-shaped.
 
-        The Qt.WindowType.Tool flag is what makes COSMIC (and most Wayland
-        compositors) actually keep this surface above other windows and out
-        of the taskbar. The downside is that the compositor decides the
-        overlay's size — it may give us a smaller rect than we ask for. The
-        movement code uses self.width() / self.height() at runtime, so the
-        buddy stays inside whatever overlay we actually receive.
+        The Qt.WindowType.Tool flag is what keeps this surface out of the
+        taskbar and (best effort) above other windows. WindowStaysOnTopHint
+        requests always-on-top, but note this is only a *hint* on Wayland —
+        COSMIC ultimately controls stacking order (see the note in main()).
+
+        WA_ShowWithoutActivating shows/maximizes the overlay without stealing
+        keyboard focus from whatever the user is doing, which also avoids the
+        focus churn that can make a Tool window hide itself.
+
+        The compositor decides the overlay's real size and delivers it after
+        show(), so the window is maximized in main() and re-anchored in
+        resizeEvent(). All coordinate math uses self.width() / self.height()
+        at runtime so the buddy stays inside whatever overlay we receive.
         """
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -168,7 +182,11 @@ class BuddyOverlay(QWidget):
             | Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
 
+        # A full-screen geometry as a starting hint. Wayland often ignores
+        # client size requests, so showMaximized() in main() does the real
+        # work of filling the screen; this just gives a sane initial rect.
         screen_geometry = QGuiApplication.primaryScreen().geometry()
         self.setGeometry(screen_geometry)
 
@@ -221,6 +239,30 @@ class BuddyOverlay(QWidget):
 
         self._show_sprite(IDLE_SPRITE)
         self._begin_walking()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        """Re-anchor the buddy to the floor whenever the overlay's size changes.
+
+        Wayland compositors decide the overlay's real size and usually deliver
+        it *after* the initial show (e.g. once we maximize to fill the screen).
+        Without re-anchoring here, the buddy would stay placed for the tiny
+        pre-maximize size and sit off-screen until a manual resize — which is
+        exactly the "invisible until I drag the window bigger" bug. Recomputing
+        the ground line and clamping her into the new bounds makes her appear
+        the instant the real size arrives.
+        """
+        super().resizeEvent(event)
+        if not self._has_started:
+            return
+
+        self._ground_y = self.height() - EDGE_MARGIN_PX
+
+        sprite_half_width = self._sprite_label.width() / 2
+        min_x = sprite_half_width + EDGE_MARGIN_PX
+        max_x = self.width() - sprite_half_width - EDGE_MARGIN_PX
+        self._feet_x = max(min_x, min(self._feet_x, max_x))
+
+        self._reposition_sprite()
 
     # --- rendering ---
 
@@ -334,10 +376,23 @@ class BuddyOverlay(QWidget):
 # === ENTRY POINT ===
 
 def main() -> int:
-    """Boot the Qt event loop and show the buddy overlay."""
+    """Boot the Qt event loop and show the buddy overlay maximized.
+
+    We use showMaximized() rather than show() because on Wayland (COSMIC)
+    the compositor decides window size and routinely ignores client size
+    requests — maximizing is the reliable way to make the overlay fill the
+    screen immediately, with no manual resize. resizeEvent() then re-anchors
+    the buddy once the maximized size actually arrives.
+
+    Note on always-on-top: Wayland gives clients no guaranteed control over
+    stacking order, so WindowStaysOnTopHint is only a hint COSMIC may ignore.
+    If the buddy still gets buried behind other windows, the robust fix is
+    the wlr/ext layer-shell protocol (via the layer-shell-qt plugin), which
+    stock PyQt6 does not expose — a larger change left for a later chunk.
+    """
     app = QApplication(sys.argv)
     overlay = BuddyOverlay()
-    overlay.show()
+    overlay.showMaximized()
     return app.exec()
 
 
