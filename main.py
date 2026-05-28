@@ -446,7 +446,7 @@ class BuddyOverlay(QWidget):
     # --- movement loop ---
 
     def _on_move_tick(self) -> None:
-        """Advance position toward target each tick; step the walk frame every STRIDE_PX traveled."""
+        """Advance toward the target each tick; step the walk frame every STRIDE_PX."""
         distance_remaining = self._target_x - self._feet_x
 
         # Arrived (or close enough): snap exactly and start the rest.

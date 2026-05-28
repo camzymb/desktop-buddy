@@ -18,7 +18,7 @@ A custom AI desktop companion built from scratch — designed, illustrated, and 
 - **Anthropic Claude API** (agent brain)
 - **Google Calendar API + Gmail API** (data sources)
 - **APScheduler** (recurring task automation)
-- **pygame** (audio playback)
+- **pygame-ce** (audio playback)
 - **Audacity + Gemini** (asset creation workflow)
 
 ## 🎯 Why I built this
@@ -38,12 +38,16 @@ It's also a portfolio demonstration of an end-to-end AI workflow — from charac
 - [x] Sprite library (17 poses)
 - [x] Voice clip library (14 clips, original recordings)
 - [x] Project structure
-- [ ] Desktop sprite rendering
-- [ ] Speech bubble system
+- [x] Desktop sprite rendering
+- [x] Speech bubble system
 - [ ] Claude API integration
 - [ ] Google Calendar sync
 - [ ] Gmail integration
 - [ ] Autostart on login
+
+## 🔤 Credits
+
+- **Font:** Speech bubbles use [**Fredoka**](https://fonts.google.com/specimen/Fredoka) by Hanken Design Co., licensed under the [SIL Open Font License 1.1](https://openfontlicense.org/). The font file and its license are bundled in [`assets/fonts/`](assets/fonts/).
 
 ## 👋 About
 

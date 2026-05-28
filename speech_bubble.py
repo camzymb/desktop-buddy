@@ -1,19 +1,28 @@
-"""A soft, rounded speech bubble that floats above the buddy's head.
+"""A soft, kawaii speech bubble that floats above the buddy's head.
 
-The bubble paints its own cream-coloured body with a little tail pointing
-down toward the character, word-wraps a short message, and sizes itself to
-fit. It fades in and out via an opacity effect for a gentle appear/disappear
-that matches her watercolour aesthetic.
+The bubble paints its own blush-pink rounded body with a little tail pointing
+down toward the character, scatters small daisy flowers in the corners, and
+word-wraps a short message in a cute rounded font. It fades in and out via an
+opacity effect for a gentle appear/disappear that matches her watercolour
+aesthetic.
+
+Font: "Fredoka" by Hanken Design Co., licensed under the SIL Open Font
+License 1.1 and bundled in assets/fonts/ (see assets/fonts/OFL.txt). Loading
+it locally keeps rendering consistent and removes any internet dependency; a
+system-font fallback is used if the bundled file is ever missing.
 """
 
 # === IMPORTS ===
 
+import math
 from collections.abc import Callable
+from pathlib import Path
 
-from PyQt6.QtCore import QPropertyAnimation, QRect, QRectF, Qt
+from PyQt6.QtCore import QPointF, QPropertyAnimation, QRect, QRectF, Qt
 from PyQt6.QtGui import (
     QColor,
     QFont,
+    QFontDatabase,
     QFontMetrics,
     QPainter,
     QPainterPath,
@@ -25,23 +34,32 @@ from PyQt6.QtWidgets import QGraphicsOpacityEffect, QWidget
 
 # === CONSTANTS ===
 
-# Soft watercolour palette: warm cream fill, muted taupe border, cocoa text.
-BUBBLE_FILL_COLOR = QColor(255, 250, 240)
-BUBBLE_BORDER_COLOR = QColor(214, 197, 178)
-BUBBLE_TEXT_COLOR = QColor(92, 78, 64)
+# Kawaii palette: blush cotton-candy fill, rose border, warm-brown text.
+BUBBLE_FILL_COLOR = QColor(255, 224, 235)
+BUBBLE_BORDER_COLOR = QColor(242, 170, 196)
+BUBBLE_TEXT_COLOR = QColor(99, 63, 60)
 
-# Friendly rounded fonts first, with graceful fallbacks if none are installed.
-BUBBLE_FONT_FAMILIES = ["Nunito", "Quicksand", "Comic Sans MS", "Sans Serif"]
+# Bundled cute rounded font (SIL OFL). System fallbacks if the file is missing.
+FONT_PATH = Path(__file__).resolve().parent / "assets" / "fonts" / "Fredoka-VariableFont.ttf"
+BUBBLE_FONT_FALLBACK_FAMILIES = ["Quicksand", "Comfortaa", "Nunito", "Sans Serif"]
 BUBBLE_FONT_POINT_SIZE = 15
 
 # Inner breathing room around the text and how round the corners are.
-BUBBLE_PADDING_PX = 18
-BUBBLE_CORNER_RADIUS_PX = 22
+BUBBLE_PADDING_PX = 24
+BUBBLE_CORNER_RADIUS_PX = 24
 BUBBLE_BORDER_WIDTH_PX = 2
 
 # The little pointer at the bottom of the bubble, aimed at her head.
 BUBBLE_TAIL_WIDTH_PX = 26
 BUBBLE_TAIL_HEIGHT_PX = 16
+
+# Decorative daisy flowers tucked into each corner: deeper-pink petals around
+# a warm-yellow center. FLOWER_RADIUS_PX scales the whole flower.
+FLOWER_PETAL_COLOR = QColor(255, 158, 190)
+FLOWER_CENTER_COLOR = QColor(255, 206, 92)
+FLOWER_PETAL_COUNT = 5
+FLOWER_RADIUS_PX = 9
+FLOWER_CORNER_INSET_PX = 17
 
 # Longest the text may run before it wraps onto another line.
 BUBBLE_MAX_TEXT_WIDTH_PX = 280
@@ -52,11 +70,35 @@ BUBBLE_FADE_MS = 400
 # Combined flags for laying out and drawing centred, word-wrapped text.
 _TEXT_FLAGS = int(Qt.TextFlag.TextWordWrap) | int(Qt.AlignmentFlag.AlignCenter)
 
+# Family name the bundled font registers as, resolved once on first use.
+_loaded_font_family: str | None = None
+
+
+def _bubble_font() -> QFont:
+    """Return the bundled Fredoka font, loading it once; fall back if missing.
+
+    Requires a running QApplication, so it is called when the bubble is built
+    (after the app starts), never at import time.
+    """
+    global _loaded_font_family
+    if _loaded_font_family is None:
+        font_id = QFontDatabase.addApplicationFont(str(FONT_PATH))
+        families = QFontDatabase.applicationFontFamilies(font_id)
+        _loaded_font_family = families[0] if families else ""
+
+    font = QFont()
+    if _loaded_font_family:
+        font.setFamily(_loaded_font_family)
+    else:
+        font.setFamilies(BUBBLE_FONT_FALLBACK_FAMILIES)
+    font.setPointSize(BUBBLE_FONT_POINT_SIZE)
+    return font
+
 
 # === SPEECH BUBBLE ===
 
 class SpeechBubble(QWidget):
-    """A self-painting, self-sizing speech bubble with fade in/out."""
+    """A self-painting, self-sizing kawaii speech bubble with fade in/out."""
 
     def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
@@ -64,9 +106,7 @@ class SpeechBubble(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
         self._text: str = ""
-        self._font = QFont()
-        self._font.setFamilies(BUBBLE_FONT_FAMILIES)
-        self._font.setPointSize(BUBBLE_FONT_POINT_SIZE)
+        self._font = _bubble_font()
 
         # An opacity effect drives the fade animations.
         self._opacity_effect = QGraphicsOpacityEffect(self)
@@ -129,7 +169,7 @@ class SpeechBubble(QWidget):
         self.resize(body_width, body_height + BUBBLE_TAIL_HEIGHT_PX)
 
     def paintEvent(self, event: QPaintEvent) -> None:
-        """Draw the rounded body, the downward tail, and the centred text."""
+        """Draw the rounded body and tail, corner flowers, then the centred text."""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
@@ -154,6 +194,8 @@ class SpeechBubble(QWidget):
         painter.setBrush(BUBBLE_FILL_COLOR)
         painter.drawPath(bubble_path.united(tail_path))
 
+        self._draw_corner_flowers(painter, body_height)
+
         painter.setPen(BUBBLE_TEXT_COLOR)
         painter.setFont(self._font)
         text_area = body_rect.adjusted(
@@ -161,3 +203,33 @@ class SpeechBubble(QWidget):
             -BUBBLE_PADDING_PX, -BUBBLE_PADDING_PX,
         )
         painter.drawText(text_area, _TEXT_FLAGS, self._text)
+
+    def _draw_corner_flowers(self, painter: QPainter, body_height: float) -> None:
+        """Tuck a small daisy into each of the four body corners."""
+        inset = FLOWER_CORNER_INSET_PX
+        corners = (
+            QPointF(inset, inset),
+            QPointF(self.width() - inset, inset),
+            QPointF(inset, body_height - inset),
+            QPointF(self.width() - inset, body_height - inset),
+        )
+        for corner in corners:
+            self._draw_flower(painter, corner)
+
+    def _draw_flower(self, painter: QPainter, center: QPointF) -> None:
+        """Paint one daisy: a ring of pink petals around a yellow center."""
+        petal_radius = FLOWER_RADIUS_PX * 0.5
+        petal_distance = FLOWER_RADIUS_PX * 0.55
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(FLOWER_PETAL_COLOR)
+        for petal_index in range(FLOWER_PETAL_COUNT):
+            angle = (2 * math.pi / FLOWER_PETAL_COUNT) * petal_index
+            petal_center = QPointF(
+                center.x() + petal_distance * math.cos(angle),
+                center.y() + petal_distance * math.sin(angle),
+            )
+            painter.drawEllipse(petal_center, petal_radius, petal_radius)
+
+        painter.setBrush(FLOWER_CENTER_COLOR)
+        painter.drawEllipse(center, FLOWER_RADIUS_PX * 0.4, FLOWER_RADIUS_PX * 0.4)
