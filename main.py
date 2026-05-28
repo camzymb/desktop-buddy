@@ -4,8 +4,12 @@ The buddy lives on a fullscreen, transparent overlay because Wayland compositors
 (including COSMIC on Pop!_OS) refuse to honor client-side window repositioning.
 The overlay window itself never moves; the sprite is a child label we
 reposition inside it. An input mask shrinks the window's "clickable" region
-to just the sprite rect, so clicks outside her body pass through to whatever
-is underneath on the desktop.
+to the sprite rect (plus the speech bubble when it shows), so clicks outside
+her body pass through to whatever is underneath on the desktop.
+
+Every so often she pauses to "talk": a soft speech bubble with a warm message
+fades in above her head, an attention pop plays followed by a recorded voice
+clip, and she switches to a friendly expression before resuming her wander.
 """
 
 # === IMPORTS ===
@@ -26,11 +30,16 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import QApplication, QLabel, QWidget
 
+from audio import SoundPlayer
+from quotes import MOTIVATIONAL_QUOTES
+from speech_bubble import SpeechBubble
+
 
 # === CONSTANTS ===
 
 PROJECT_DIR = Path(__file__).resolve().parent
 SPRITES_DIR = PROJECT_DIR / "sprites"
+SOUNDS_DIR = PROJECT_DIR / "sounds"
 
 # How tall the buddy appears on screen. Width is derived from each sprite's
 # aspect ratio at load time.
@@ -60,6 +69,22 @@ MAX_IDLE_MS = 3000
 # walk feels like a real journey rather than a shuffle.
 MIN_TRIP_DISTANCE_PX = 600
 
+# --- Talking ---
+
+# A warm hello a few seconds after launch, then spontaneous talks on a gentle
+# recurring timer. Each interval is randomised within the range so she doesn't
+# speak like clockwork. She can also be triggered on demand with the spacebar
+# (handy for testing without waiting for the timer).
+FIRST_TALK_DELAY_MS = 4000
+TALK_INTERVAL_MIN_MS = 20 * 60 * 1000
+TALK_INTERVAL_MAX_MS = 30 * 60 * 1000
+
+# How long the speech bubble stays fully visible between fade-in and fade-out.
+BUBBLE_HOLD_MS = 7000
+
+# Gap between the top of her head and the bottom (tail) of the speech bubble.
+BUBBLE_GAP_ABOVE_HEAD_PX = 6
+
 
 # === ENUMS ===
 
@@ -73,6 +98,7 @@ class State(Enum):
     """High-level behavior state."""
     WALKING = auto()
     IDLE = auto()
+    TALKING = auto()
 
 
 # === SPRITE CONFIG ===
@@ -113,6 +139,13 @@ RESERVED_SPRITES: tuple[str, ...] = (
     "walk_back_a.png",  "walk_back_b.png",
 )
 
+# Friendly faces shown while she's talking; one is chosen at random per
+# message. The other expression sprites (surprised, sleepy) are reserved for
+# future context-specific messages.
+TALK_EXPRESSION_SPRITES: tuple[str, ...] = (
+    "happy.png", "waving.png", "thinking.png",
+)
+
 
 # === BUDDY OVERLAY ===
 
@@ -136,6 +169,8 @@ class BuddyOverlay(QWidget):
         # Saves disk reads on every leg-swap during a walk.
         self._pixmaps = self._load_pixmaps()
         self._sprite_label = QLabel(self)
+        self._speech_bubble = SpeechBubble(self)
+        self._sound_player = SoundPlayer(SOUNDS_DIR)
 
         # Walk state. Position is initialized later in showEvent() once the
         # window has its real size from the compositor.
@@ -158,6 +193,21 @@ class BuddyOverlay(QWidget):
         self._idle_timer = QTimer(self)
         self._idle_timer.setSingleShot(True)
         self._idle_timer.timeout.connect(self._begin_walking)
+
+        # Talking timers. _talk_timer triggers a spontaneous talk and is
+        # rescheduled after each one. _voice_delay_timer starts the voice clip
+        # after the pop, and _bubble_hold_timer ends the bubble after its hold.
+        self._talk_timer = QTimer(self)
+        self._talk_timer.setSingleShot(True)
+        self._talk_timer.timeout.connect(self._begin_talking)
+
+        self._voice_delay_timer = QTimer(self)
+        self._voice_delay_timer.setSingleShot(True)
+        self._voice_delay_timer.timeout.connect(self._sound_player.play_random_voice)
+
+        self._bubble_hold_timer = QTimer(self)
+        self._bubble_hold_timer.setSingleShot(True)
+        self._bubble_hold_timer.timeout.connect(self._end_talking)
 
     def _configure_window(self) -> None:
         """Make the window frameless, transparent, always on top, and overlay-shaped.
@@ -197,7 +247,12 @@ class BuddyOverlay(QWidget):
         head-turn frames so the asset pipeline stays intact and any missing
         file fails loudly here at startup rather than mid-feature.
         """
-        filenames: set[str] = {IDLE_SPRITE, *RESERVED_SPRITES, *UNUSED_HEAD_TURN_FRAMES}
+        filenames: set[str] = {
+            IDLE_SPRITE,
+            *RESERVED_SPRITES,
+            *UNUSED_HEAD_TURN_FRAMES,
+            *TALK_EXPRESSION_SPRITES,
+        }
         for direction_frames in DIRECTION_FRAMES.values():
             filenames.update(direction_frames)
 
@@ -240,6 +295,10 @@ class BuddyOverlay(QWidget):
         self._show_sprite(IDLE_SPRITE)
         self._begin_walking()
 
+        # First warm hello shortly after launch; later talks are queued by
+        # _on_bubble_hidden() once each one finishes.
+        self._talk_timer.start(FIRST_TALK_DELAY_MS)
+
     def resizeEvent(self, event: QResizeEvent) -> None:
         """Re-anchor the buddy to the floor whenever the overlay's size changes.
 
@@ -262,6 +321,8 @@ class BuddyOverlay(QWidget):
         max_x = self.width() - sprite_half_width - EDGE_MARGIN_PX
         self._feet_x = max(min_x, min(self._feet_x, max_x))
 
+        if self._state == State.TALKING:
+            self._position_bubble()
         self._reposition_sprite()
 
     # --- rendering ---
@@ -274,18 +335,27 @@ class BuddyOverlay(QWidget):
         self._reposition_sprite()
 
     def _reposition_sprite(self) -> None:
-        """Move the sprite label to the current feet coordinate and update the input mask.
-
-        The mask is what enables click-through: anywhere outside this rect,
-        the overlay is both invisible and ignores mouse input, so clicks
-        reach the windows underneath.
-        """
+        """Move the sprite label to the current feet coordinate and refresh the input mask."""
         sprite_width = self._sprite_label.width()
         sprite_height = self._sprite_label.height()
         left_x = int(self._feet_x - sprite_width / 2)
         top_y = int(self._ground_y - sprite_height)
         self._sprite_label.move(left_x, top_y)
-        self.setMask(QRegion(left_x, top_y, sprite_width, sprite_height))
+        self._update_input_mask()
+
+    def _update_input_mask(self) -> None:
+        """Clip the overlay to the buddy — plus the speech bubble while it shows.
+
+        The mask is what enables click-through: anywhere outside this region
+        the overlay is both invisible and ignores mouse input, so clicks reach
+        the windows underneath. The bubble sits above her head, outside the
+        sprite rect, so it must be unioned in while visible or the mask would
+        clip it away.
+        """
+        region = QRegion(self._sprite_label.geometry())
+        if self._speech_bubble.isVisible():
+            region = region.united(QRegion(self._speech_bubble.geometry()))
+        self.setMask(region)
 
     # --- state transitions ---
 
@@ -308,6 +378,70 @@ class BuddyOverlay(QWidget):
         self._show_sprite(IDLE_SPRITE)
         pause_duration_ms = random.randint(MIN_IDLE_MS, MAX_IDLE_MS)
         self._idle_timer.start(pause_duration_ms)
+
+    # --- talking ---
+
+    def _begin_talking(self) -> None:
+        """Pause wandering to show a speech bubble, play a voice line, and emote.
+
+        Interrupts whatever she's doing (walking or resting), switches to a
+        friendly expression, fades in a random encouragement, and plays the
+        attention pop followed by a voice clip. _bubble_hold_timer later fires
+        _end_talking() to fade the bubble out and resume her normal wander.
+
+        Re-triggers while she's already talking (a stray timer tick or an
+        eager spacebar press) are ignored so a bubble in progress isn't reset.
+        """
+        if self._state == State.TALKING:
+            return
+
+        self._move_timer.stop()
+        self._idle_timer.stop()
+        self._state = State.TALKING
+
+        self._show_sprite(random.choice(TALK_EXPRESSION_SPRITES))
+
+        self._speech_bubble.set_message(random.choice(MOTIVATIONAL_QUOTES))
+        self._position_bubble()
+        self._speech_bubble.fade_in()
+        self._update_input_mask()
+
+        # Pop first; start the voice clip once the pop has finished so they
+        # don't talk over each other (length is 0 when audio is unavailable).
+        pop_length_ms = int(self._sound_player.play_pop() * 1000)
+        self._voice_delay_timer.start(pop_length_ms)
+
+        self._bubble_hold_timer.start(BUBBLE_HOLD_MS)
+
+    def _end_talking(self) -> None:
+        """Fade the speech bubble out; resume wandering once it's fully hidden."""
+        self._speech_bubble.fade_out(self._on_bubble_hidden)
+
+    def _on_bubble_hidden(self) -> None:
+        """Restore the click-through mask, queue the next talk, and walk again."""
+        self._update_input_mask()
+        self._schedule_next_talk()
+        self._begin_resting()
+
+    def _schedule_next_talk(self) -> None:
+        """Queue her next spontaneous talk 20-30 minutes from now."""
+        interval_ms = random.randint(TALK_INTERVAL_MIN_MS, TALK_INTERVAL_MAX_MS)
+        self._talk_timer.start(interval_ms)
+
+    def _position_bubble(self) -> None:
+        """Center the speech bubble just above the buddy's head, kept on-screen."""
+        bubble_width = self._speech_bubble.width()
+        bubble_height = self._speech_bubble.height()
+        sprite_top_y = self._ground_y - self._sprite_label.height()
+
+        left_x = int(self._feet_x - bubble_width / 2)
+        max_left_x = self.width() - EDGE_MARGIN_PX - bubble_width
+        left_x = max(EDGE_MARGIN_PX, min(left_x, max_left_x))
+
+        top_y = sprite_top_y - bubble_height - BUBBLE_GAP_ABOVE_HEAD_PX
+        top_y = max(EDGE_MARGIN_PX, top_y)
+
+        self._speech_bubble.move(left_x, top_y)
 
     # --- movement loop ---
 
@@ -366,9 +500,16 @@ class BuddyOverlay(QWidget):
     # --- input ---
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
-        """Close the buddy when Escape is pressed; pass everything else through."""
+        """Handle keys: Escape closes, Spacebar makes her talk on demand.
+
+        Both require the overlay to hold keyboard focus — clicking the buddy
+        gives it focus. The spacebar trigger is the same behavior as the timed
+        talk, handy for testing and demos.
+        """
         if event.key() == Qt.Key.Key_Escape:
             self.close()
+        elif event.key() == Qt.Key.Key_Space:
+            self._begin_talking()
         else:
             super().keyPressEvent(event)
 
