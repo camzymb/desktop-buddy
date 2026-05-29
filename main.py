@@ -16,7 +16,10 @@ clip, and she switches to a friendly expression before resuming her wander.
 
 import random
 import sys
+import threading
+import webbrowser
 from enum import Enum, auto
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer
@@ -31,6 +34,8 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import QApplication, QLabel, QWidget
 
 from audio import SoundPlayer
+from callout_panel import CalloutPanel
+from callout_server import HOST, PORT, create_server
 from quotes import MOTIVATIONAL_QUOTES
 from speech_bubble import SpeechBubble
 
@@ -84,6 +89,31 @@ BUBBLE_HOLD_MS = 7000
 
 # Gap between the top of her head and the bottom (tail) of the speech bubble.
 BUBBLE_GAP_ABOVE_HEAD_PX = 6
+
+# --- Daily summary callout ---
+
+# Pressing "C" opens the callout in the default browser. The callout server
+# serves the callout/ folder as its root, so the page lives at the server
+# root; the URL is built from the server's host/port to stay in sync.
+CALLOUT_URL = f"http://{HOST}:{PORT}/"
+CALLOUT_OPEN_FAILED_MESSAGE = "I couldn't open your daily summary — sorry! 🤍"
+
+# Pressing "P" pops the daily-summary panel out of the buddy and parks it
+# against the left edge; pressing it again retracts it. The panel fetches real
+# calendar events itself; the Must-Do/Goals lists are placeholders for now
+# (working checkboxes), and the note is a fixed warm message.
+PANEL_MUST_DO_ITEMS: tuple[str, ...] = (
+    "Reply to messages",
+    "Finish portfolio section",
+    "Tidy the desk",
+    "Drink some water",
+)
+PANEL_GOAL_ITEMS: tuple[str, ...] = (
+    "Ship the desktop buddy",
+    "Rest without guilt",
+    "Move my body each day",
+)
+PANEL_NOTE: str = "You're doing so well. Take today one gentle step at a time."
 
 
 # === ENUMS ===
@@ -170,6 +200,12 @@ class BuddyOverlay(QWidget):
         self._pixmaps = self._load_pixmaps()
         self._sprite_label = QLabel(self)
         self._speech_bubble = SpeechBubble(self)
+        # Proof-of-concept daily-summary panel. It refreshes the overlay mask
+        # on every animation frame via the callback so it stays visible while
+        # the rest of the desktop remains click-through.
+        self._callout_panel = CalloutPanel(self, self._update_input_mask)
+        self._callout_panel.set_checklists(list(PANEL_MUST_DO_ITEMS), list(PANEL_GOAL_ITEMS))
+        self._callout_panel.set_note(PANEL_NOTE)
         self._sound_player = SoundPlayer(SOUNDS_DIR)
 
         # Walk state. Position is initialized later in showEvent() once the
@@ -323,6 +359,8 @@ class BuddyOverlay(QWidget):
 
         if self._state == State.TALKING:
             self._position_bubble()
+        if self._callout_panel.is_open:
+            self._callout_panel.reposition(self._callout_panel.left_slot_rect(self.height()))
         self._reposition_sprite()
 
     # --- rendering ---
@@ -348,13 +386,15 @@ class BuddyOverlay(QWidget):
 
         The mask is what enables click-through: anywhere outside this region
         the overlay is both invisible and ignores mouse input, so clicks reach
-        the windows underneath. The bubble sits above her head, outside the
-        sprite rect, so it must be unioned in while visible or the mask would
-        clip it away.
+        the windows underneath. The speech bubble and the daily-summary panel
+        sit outside the sprite rect, so each must be unioned in while visible
+        (the panel on every animation frame) or the mask would clip it away.
         """
         region = QRegion(self._sprite_label.geometry())
         if self._speech_bubble.isVisible():
             region = region.united(QRegion(self._speech_bubble.geometry()))
+        if self._callout_panel.isVisible():
+            region = region.united(QRegion(self._callout_panel.geometry()))
         self.setMask(region)
 
     # --- state transitions ---
@@ -381,16 +421,17 @@ class BuddyOverlay(QWidget):
 
     # --- talking ---
 
-    def _begin_talking(self) -> None:
-        """Pause wandering to show a speech bubble, play a voice line, and emote.
+    def _begin_talking(self, message: str | None = None, *, play_voice: bool = True) -> None:
+        """Pause wandering to show a speech bubble and emote, optionally with voice.
 
-        Interrupts whatever she's doing (walking or resting), switches to a
-        friendly expression, fades in a random encouragement, and plays the
-        attention pop followed by a voice clip. _bubble_hold_timer later fires
-        _end_talking() to fade the bubble out and resume her normal wander.
+        With no message she shares a random encouragement and plays the
+        attention pop followed by a voice clip. Callers can pass a specific
+        message (e.g. a friendly error) and set play_voice=False for a silent
+        bubble. _bubble_hold_timer later fires _end_talking() to fade the
+        bubble out and resume her normal wander.
 
         Re-triggers while she's already talking (a stray timer tick or an
-        eager spacebar press) are ignored so a bubble in progress isn't reset.
+        eager key press) are ignored so a bubble in progress isn't reset.
         """
         if self._state == State.TALKING:
             return
@@ -401,15 +442,17 @@ class BuddyOverlay(QWidget):
 
         self._show_sprite(random.choice(TALK_EXPRESSION_SPRITES))
 
-        self._speech_bubble.set_message(random.choice(MOTIVATIONAL_QUOTES))
+        spoken = message if message is not None else random.choice(MOTIVATIONAL_QUOTES)
+        self._speech_bubble.set_message(spoken)
         self._position_bubble()
         self._speech_bubble.fade_in()
         self._update_input_mask()
 
-        # Pop first; start the voice clip once the pop has finished so they
-        # don't talk over each other (length is 0 when audio is unavailable).
-        pop_length_ms = int(self._sound_player.play_pop() * 1000)
-        self._voice_delay_timer.start(pop_length_ms)
+        if play_voice:
+            # Pop first; start the voice clip once the pop has finished so they
+            # don't talk over each other (length is 0 when audio is unavailable).
+            pop_length_ms = int(self._sound_player.play_pop() * 1000)
+            self._voice_delay_timer.start(pop_length_ms)
 
         self._bubble_hold_timer.start(BUBBLE_HOLD_MS)
 
@@ -497,27 +540,81 @@ class BuddyOverlay(QWidget):
         screen_mid_x = (min_x + max_x) / 2
         return max_x if self._feet_x < screen_mid_x else min_x
 
+    # --- callout ---
+
+    def _open_callout(self) -> None:
+        """Open the daily summary callout in the user's default web browser.
+
+        If no browser can be opened, she shows a friendly message instead of
+        the app crashing.
+        """
+        try:
+            opened = webbrowser.open(CALLOUT_URL)
+        except OSError:
+            opened = False
+        if not opened:
+            self._begin_talking(CALLOUT_OPEN_FAILED_MESSAGE, play_voice=False)
+
+    def _toggle_panel(self) -> None:
+        """Pop the proof-of-concept daily-summary panel out of the buddy, or retract it.
+
+        The panel grows out of (and retracts into) her current on-screen
+        center, then parks against the left edge. Toggling mid-animation just
+        reverses smoothly because the animation is restarted from wherever the
+        card currently is.
+        """
+        seed_center = self._sprite_label.geometry().center()
+        if self._callout_panel.is_open:
+            self._callout_panel.retract(seed_center)
+        else:
+            final_rect = self._callout_panel.left_slot_rect(self.height())
+            self._callout_panel.pop_out(seed_center, final_rect)
+
     # --- input ---
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
-        """Handle keys: Escape closes, Spacebar makes her talk on demand.
+        """Handle keys: Escape closes, Spacebar talks, "C" opens the summary, "P" pops the panel.
 
-        Both require the overlay to hold keyboard focus — clicking the buddy
-        gives it focus. The spacebar trigger is the same behavior as the timed
-        talk, handy for testing and demos.
+        All require the overlay to hold keyboard focus — clicking the buddy
+        gives it focus. Spacebar triggers the same talk as the timer; "C" opens
+        the callout in the default browser; "P" toggles the proof-of-concept
+        daily-summary panel that grows out of her.
         """
         if event.key() == Qt.Key.Key_Escape:
             self.close()
         elif event.key() == Qt.Key.Key_Space:
             self._begin_talking()
+        elif event.key() == Qt.Key.Key_C:
+            self._open_callout()
+        elif event.key() == Qt.Key.Key_P:
+            self._toggle_panel()
         else:
             super().keyPressEvent(event)
 
 
 # === ENTRY POINT ===
 
+def _start_callout_server() -> ThreadingHTTPServer | None:
+    """Start the callout web server on a background daemon thread.
+
+    Returns the running server so it can be shut down cleanly on exit, or None
+    if it couldn't bind (e.g. the port is already in use, meaning a server is
+    likely already running). Either way the buddy keeps working; the "C"
+    shortcut just opens whatever is serving that address. Using a daemon
+    thread — not a subprocess — means there is no separate process to orphan.
+    """
+    try:
+        server = create_server()
+    except OSError:
+        return None
+    threading.Thread(
+        target=server.serve_forever, name="callout-server", daemon=True
+    ).start()
+    return server
+
+
 def main() -> int:
-    """Boot the Qt event loop and show the buddy overlay maximized.
+    """Boot the Qt event loop, start the callout server, and show the buddy.
 
     We use showMaximized() rather than show() because on Wayland (COSMIC)
     the compositor decides window size and routinely ignores client size
@@ -532,9 +629,16 @@ def main() -> int:
     stock PyQt6 does not expose — a larger change left for a later chunk.
     """
     app = QApplication(sys.argv)
+    callout_server = _start_callout_server()
     overlay = BuddyOverlay()
     overlay.showMaximized()
-    return app.exec()
+    try:
+        return app.exec()
+    finally:
+        # Shut the server down so no thread or socket is left behind on exit.
+        if callout_server is not None:
+            callout_server.shutdown()
+            callout_server.server_close()
 
 
 if __name__ == "__main__":

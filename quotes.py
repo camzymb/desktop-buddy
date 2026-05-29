@@ -40,6 +40,15 @@ EMOTIONAL_SUPPORT_QUOTES: tuple[str, ...] = (
     "Tiny wins count too. Promise. 🤍",
     "However today goes, I'm glad you're here.",
     "You've made it through every hard day so far.",
+    "You're enough, exactly as you are today. 🤍",
+    "Let today be soft. You deserve that.",
+    "Mistakes just mean you're trying. Keep going.",
+    "It's okay to ask for help, you know.",
+    "Feelings pass. You won't feel this forever. 🤍",
+    "You don't have to earn your rest.",
+    "Celebrate the little wins — they add up.",
+    "Today doesn't have to be perfect to be good.",
+    "You're allowed to begin again anytime.",
 )
 
 # Practical self-care: gentle nudges to drink, stretch, blink, eat, breathe.
@@ -60,6 +69,15 @@ PRACTICAL_SELF_CARE_QUOTES: tuple[str, ...] = (
     "Maybe refill your water before it runs out? 💧",
     "Wiggle your fingers and give your wrists a rest.",
     "If you're cold, go grab a cozy layer. 🤍",
+    "Time to refill that water cup? 💧",
+    "Quick stretch break — reach up for the sky! 🤍",
+    "Rest your eyes: look at something far away. 👀",
+    "Have you eaten enough today? Go grab a bite.",
+    "Shake out your hands and let the tension go.",
+    "Maybe step outside for a little fresh air? 🌿",
+    "Took your vitamins yet? A gentle reminder. 🤍",
+    "A few slow breaths can reset the whole day.",
+    "Tidy one small thing — it'll feel good. 🤍",
 )
 
 # Combined pool the app draws from at random.

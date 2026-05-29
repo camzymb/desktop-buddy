@@ -1,10 +1,11 @@
 """A soft, kawaii speech bubble that floats above the buddy's head.
 
-The bubble paints its own blush-pink rounded body with a little tail pointing
-down toward the character, scatters small daisy flowers in the corners, and
-word-wraps a short message in a cute rounded font. It fades in and out via an
-opacity effect for a gentle appear/disappear that matches her watercolour
-aesthetic.
+The bubble paints its own soft, flat baby-pink rounded body (borderless,
+comic-style) with a little pointed tail aimed down at the character, tucks
+small daisy flowers into two corners and doodles tiny "sparkle" dash accents
+near the other two, and word-wraps a short message in a cute rounded font. It
+fades in and out via an opacity effect for a gentle appear/disappear that
+matches her watercolour aesthetic.
 
 Font: "Fredoka" by Hanken Design Co., licensed under the SIL Open Font
 License 1.1 and bundled in assets/fonts/ (see assets/fonts/OFL.txt). Loading
@@ -18,7 +19,7 @@ import math
 from collections.abc import Callable
 from pathlib import Path
 
-from PyQt6.QtCore import QPointF, QPropertyAnimation, QRect, QRectF, Qt
+from PyQt6.QtCore import QLineF, QPointF, QPropertyAnimation, QRect, QRectF, Qt
 from PyQt6.QtGui import (
     QColor,
     QFont,
@@ -34,9 +35,10 @@ from PyQt6.QtWidgets import QGraphicsOpacityEffect, QWidget
 
 # === CONSTANTS ===
 
-# Kawaii palette: blush cotton-candy fill, rose border, warm-brown text.
-BUBBLE_FILL_COLOR = QColor(255, 224, 235)
-BUBBLE_BORDER_COLOR = QColor(242, 170, 196)
+# Kawaii palette: soft, flat baby-pink fill (borderless, comic-style), with a
+# slightly deeper rose for the little decorative accents and warm-brown text.
+BUBBLE_FILL_COLOR = QColor(250, 198, 209)
+BUBBLE_ACCENT_COLOR = QColor(244, 166, 190)
 BUBBLE_TEXT_COLOR = QColor(99, 63, 60)
 
 # Bundled cute rounded font (SIL OFL). System fallbacks if the file is missing.
@@ -44,22 +46,31 @@ FONT_PATH = Path(__file__).resolve().parent / "assets" / "fonts" / "Fredoka-Vari
 BUBBLE_FONT_FALLBACK_FAMILIES = ["Quicksand", "Comfortaa", "Nunito", "Sans Serif"]
 BUBBLE_FONT_POINT_SIZE = 15
 
-# Inner breathing room around the text and how round the corners are.
+# Inner breathing room around the text and how round the corners are. The
+# generous radius gives the soft, pillowy comic-bubble silhouette.
 BUBBLE_PADDING_PX = 24
-BUBBLE_CORNER_RADIUS_PX = 24
-BUBBLE_BORDER_WIDTH_PX = 2
+BUBBLE_CORNER_RADIUS_PX = 30
 
-# The little pointer at the bottom of the bubble, aimed at her head.
-BUBBLE_TAIL_WIDTH_PX = 26
-BUBBLE_TAIL_HEIGHT_PX = 16
+# The little pointed tail at the bottom of the bubble, aimed down at her head.
+# Kept narrow and tall for the comic "speech" look in the reference art.
+BUBBLE_TAIL_WIDTH_PX = 22
+BUBBLE_TAIL_HEIGHT_PX = 20
 
-# Decorative daisy flowers tucked into each corner: deeper-pink petals around
-# a warm-yellow center. FLOWER_RADIUS_PX scales the whole flower.
+# Decorative daisy flowers tucked into two diagonal corners: deeper-pink petals
+# around a warm-yellow center. FLOWER_RADIUS_PX scales the whole flower.
 FLOWER_PETAL_COLOR = QColor(255, 158, 190)
 FLOWER_CENTER_COLOR = QColor(255, 206, 92)
 FLOWER_PETAL_COUNT = 5
 FLOWER_RADIUS_PX = 9
-FLOWER_CORNER_INSET_PX = 17
+FLOWER_CORNER_INSET_PX = 18
+
+# Tiny comic "sparkle" dash accents near the other two corners: a pair of short
+# rounded strokes, like the little marks doodled around the reference bubble.
+ACCENT_DASH_COUNT = 2
+ACCENT_DASH_LENGTH_PX = 11
+ACCENT_DASH_WIDTH_PX = 3
+ACCENT_DASH_GAP_PX = 7
+ACCENT_CORNER_INSET_PX = 15
 
 # Longest the text may run before it wraps onto another line.
 BUBBLE_MAX_TEXT_WIDTH_PX = 280
@@ -169,7 +180,7 @@ class SpeechBubble(QWidget):
         self.resize(body_width, body_height + BUBBLE_TAIL_HEIGHT_PX)
 
     def paintEvent(self, event: QPaintEvent) -> None:
-        """Draw the rounded body and tail, corner flowers, then the centred text."""
+        """Draw the flat body and tail, corner accents and flowers, then text."""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
@@ -181,7 +192,8 @@ class SpeechBubble(QWidget):
             body_rect, BUBBLE_CORNER_RADIUS_PX, BUBBLE_CORNER_RADIUS_PX
         )
 
-        # A triangle tail centred along the bottom edge, merged into the body.
+        # A narrow triangle tail centred along the bottom edge, merged into the
+        # body. Centred so it always points straight down at her head.
         tail_center_x = self.width() / 2
         tail_top_y = body_height - 1  # slight overlap so the join is seamless
         tail_path = QPainterPath()
@@ -190,10 +202,12 @@ class SpeechBubble(QWidget):
         tail_path.lineTo(tail_center_x + BUBBLE_TAIL_WIDTH_PX / 2, tail_top_y)
         tail_path.closeSubpath()
 
-        painter.setPen(QPen(BUBBLE_BORDER_COLOR, BUBBLE_BORDER_WIDTH_PX))
+        # Flat, borderless fill for the soft comic look from the reference art.
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(BUBBLE_FILL_COLOR)
         painter.drawPath(bubble_path.united(tail_path))
 
+        self._draw_corner_accents(painter, body_height)
         self._draw_corner_flowers(painter, body_height)
 
         painter.setPen(BUBBLE_TEXT_COLOR)
@@ -205,16 +219,41 @@ class SpeechBubble(QWidget):
         painter.drawText(text_area, _TEXT_FLAGS, self._text)
 
     def _draw_corner_flowers(self, painter: QPainter, body_height: float) -> None:
-        """Tuck a small daisy into each of the four body corners."""
+        """Tuck a small daisy into the top-left and bottom-right body corners."""
         inset = FLOWER_CORNER_INSET_PX
         corners = (
             QPointF(inset, inset),
-            QPointF(self.width() - inset, inset),
-            QPointF(inset, body_height - inset),
             QPointF(self.width() - inset, body_height - inset),
         )
         for corner in corners:
             self._draw_flower(painter, corner)
+
+    def _draw_corner_accents(self, painter: QPainter, body_height: float) -> None:
+        """Doodle a pair of sparkle dashes near the top-right/bottom-left corners."""
+        inset = ACCENT_CORNER_INSET_PX
+        anchors = (
+            QPointF(self.width() - inset, inset),
+            QPointF(inset, body_height - inset),
+        )
+        for anchor in anchors:
+            self._draw_accent_dashes(painter, anchor)
+
+    def _draw_accent_dashes(self, painter: QPainter, center: QPointF) -> None:
+        """Paint a little cluster of short, round-capped diagonal "/" strokes."""
+        pen = QPen(BUBBLE_ACCENT_COLOR, ACCENT_DASH_WIDTH_PX)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        half_length = ACCENT_DASH_LENGTH_PX / 2
+        first_offset = -(ACCENT_DASH_COUNT - 1) / 2
+        for dash_index in range(ACCENT_DASH_COUNT):
+            offset_x = (first_offset + dash_index) * ACCENT_DASH_GAP_PX
+            stroke = QLineF(
+                center.x() + offset_x - half_length * 0.5, center.y() + half_length,
+                center.x() + offset_x + half_length * 0.5, center.y() - half_length,
+            )
+            painter.drawLine(stroke)
 
     def _draw_flower(self, painter: QPainter, center: QPointF) -> None:
         """Paint one daisy: a ring of pink petals around a yellow center."""

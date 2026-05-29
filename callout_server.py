@@ -75,9 +75,18 @@ class CalloutRequestHandler(SimpleHTTPRequestHandler):
 
 # === ENTRY POINT ===
 
+def create_server() -> ThreadingHTTPServer:
+    """Build the localhost callout server (bound to the socket, not yet serving).
+
+    Returned so callers can serve it however they like — the standalone CLI
+    runs it in the foreground; the buddy app runs it on a background thread.
+    """
+    return ThreadingHTTPServer((HOST, PORT), CalloutRequestHandler)
+
+
 def main() -> None:
-    """Start the local callout server until interrupted."""
-    server = ThreadingHTTPServer((HOST, PORT), CalloutRequestHandler)
+    """Run the callout server in the foreground until interrupted."""
+    server = create_server()
     print(f"Daily summary callout running at http://{HOST}:{PORT}/")
     print("Press Ctrl+C to stop.")
     try:
