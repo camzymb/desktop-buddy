@@ -22,7 +22,7 @@ from enum import Enum, auto
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import QLockFile, QStandardPaths, Qt, QTimer
 from PyQt6.QtGui import (
     QGuiApplication,
     QKeyEvent,
@@ -76,13 +76,26 @@ MIN_TRIP_DISTANCE_PX = 600
 
 # --- Talking ---
 
-# A warm hello a few seconds after launch, then spontaneous talks on a gentle
-# recurring timer. Each interval is randomised within the range so she doesn't
-# speak like clockwork. She can also be triggered on demand with the spacebar
-# (handy for testing without waiting for the timer).
-FIRST_TALK_DELAY_MS = 4000
+# Spontaneous talks on a gentle recurring timer. Each interval is randomised
+# within the range so she doesn't speak like clockwork. She can also be
+# triggered on demand with the spacebar (handy for testing without waiting).
 TALK_INTERVAL_MIN_MS = 20 * 60 * 1000
 TALK_INTERVAL_MAX_MS = 30 * 60 * 1000
+
+# --- Startup greeting ---
+
+# On launch (e.g. autostart at login), she settles in, gives a fixed
+# welcome-back greeting, then auto-opens the daily post-it once so you see your
+# day. The panel opens a beat AFTER the greeting bubble so the two don't pop at
+# once.
+STARTUP_GREETING_DELAY_MS = 3000
+STARTUP_PANEL_DELAY_MS = 1400
+
+# The login moment is deliberately fixed and consistent — unlike the random
+# quotes and sounds she shares the rest of the time. It pairs one set line with
+# the matching recorded clip in sounds/.
+LOGIN_GREETING = "Welcome back, Camille. Take it gentle today."
+LOGIN_VOICE_FILENAME = "voice_welcomeBack.mp3"
 
 # How long the speech bubble stays fully visible between fade-in and fade-out.
 BUBBLE_HOLD_MS = 7000
@@ -114,6 +127,12 @@ PANEL_GOAL_ITEMS: tuple[str, ...] = (
     "Move my body each day",
 )
 PANEL_NOTE: str = "You're doing so well. Take today one gentle step at a time."
+
+# --- Single instance ---
+
+# A per-user lock so only one buddy ever runs at a time (e.g. if autostart and
+# a manual launch both fire). Lives in the runtime dir, cleaned up on exit.
+LOCK_FILE_NAME = "desktop-buddy.lock"
 
 
 # === ENUMS ===
@@ -237,13 +256,27 @@ class BuddyOverlay(QWidget):
         self._talk_timer.setSingleShot(True)
         self._talk_timer.timeout.connect(self._begin_talking)
 
+        # The voice clip queued for the current talk: None means "pick a random
+        # one" (her spontaneous default); a filename means play that specific
+        # clip (the fixed login welcome-back greeting).
+        self._pending_voice: str | None = None
         self._voice_delay_timer = QTimer(self)
         self._voice_delay_timer.setSingleShot(True)
-        self._voice_delay_timer.timeout.connect(self._sound_player.play_random_voice)
+        self._voice_delay_timer.timeout.connect(self._play_pending_voice)
 
         self._bubble_hold_timer = QTimer(self)
         self._bubble_hold_timer.setSingleShot(True)
         self._bubble_hold_timer.timeout.connect(self._end_talking)
+
+        # Startup-greeting timers: one to give the greeting after she settles,
+        # one to auto-open the post-it a beat later. Both fire once at launch.
+        self._startup_timer = QTimer(self)
+        self._startup_timer.setSingleShot(True)
+        self._startup_timer.timeout.connect(self._run_startup_greeting)
+
+        self._startup_panel_timer = QTimer(self)
+        self._startup_panel_timer.setSingleShot(True)
+        self._startup_panel_timer.timeout.connect(self._open_panel)
 
     def _configure_window(self) -> None:
         """Make the window frameless, transparent, always on top, and overlay-shaped.
@@ -331,9 +364,9 @@ class BuddyOverlay(QWidget):
         self._show_sprite(IDLE_SPRITE)
         self._begin_walking()
 
-        # First warm hello shortly after launch; later talks are queued by
-        # _on_bubble_hidden() once each one finishes.
-        self._talk_timer.start(FIRST_TALK_DELAY_MS)
+        # Startup greeting: once she's settled, she says hello and opens the
+        # post-it. The recurring talk cycle then resumes via _on_bubble_hidden().
+        self._startup_timer.start(STARTUP_GREETING_DELAY_MS)
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         """Re-anchor the buddy to the floor whenever the overlay's size changes.
@@ -421,14 +454,22 @@ class BuddyOverlay(QWidget):
 
     # --- talking ---
 
-    def _begin_talking(self, message: str | None = None, *, play_voice: bool = True) -> None:
+    def _begin_talking(
+        self,
+        message: str | None = None,
+        *,
+        play_voice: bool = True,
+        voice: str | None = None,
+    ) -> None:
         """Pause wandering to show a speech bubble and emote, optionally with voice.
 
         With no message she shares a random encouragement and plays the
         attention pop followed by a voice clip. Callers can pass a specific
         message (e.g. a friendly error) and set play_voice=False for a silent
-        bubble. _bubble_hold_timer later fires _end_talking() to fade the
-        bubble out and resume her normal wander.
+        bubble. Passing voice=<filename> plays that specific clip after the pop
+        instead of a random one (used for the fixed login greeting); leaving it
+        None keeps her usual random pick. _bubble_hold_timer later fires
+        _end_talking() to fade the bubble out and resume her normal wander.
 
         Re-triggers while she's already talking (a stray timer tick or an
         eager key press) are ignored so a bubble in progress isn't reset.
@@ -451,6 +492,7 @@ class BuddyOverlay(QWidget):
         if play_voice:
             # Pop first; start the voice clip once the pop has finished so they
             # don't talk over each other (length is 0 when audio is unavailable).
+            self._pending_voice = voice
             pop_length_ms = int(self._sound_player.play_pop() * 1000)
             self._voice_delay_timer.start(pop_length_ms)
 
@@ -470,6 +512,17 @@ class BuddyOverlay(QWidget):
         """Queue her next spontaneous talk 20-30 minutes from now."""
         interval_ms = random.randint(TALK_INTERVAL_MIN_MS, TALK_INTERVAL_MAX_MS)
         self._talk_timer.start(interval_ms)
+
+    def _play_pending_voice(self) -> None:
+        """Play the clip queued for the current talk, once the pop has finished.
+
+        A specific filename (the fixed login greeting) plays that exact clip;
+        None — her spontaneous default — plays a random one.
+        """
+        if self._pending_voice is None:
+            self._sound_player.play_random_voice()
+        else:
+            self._sound_player.play_voice(self._pending_voice)
 
     def _position_bubble(self) -> None:
         """Center the speech bubble just above the buddy's head, kept on-screen."""
@@ -556,29 +609,49 @@ class BuddyOverlay(QWidget):
             self._begin_talking(CALLOUT_OPEN_FAILED_MESSAGE, play_voice=False)
 
     def _toggle_panel(self) -> None:
-        """Pop the proof-of-concept daily-summary panel out of the buddy, or retract it.
+        """Pop the daily-summary panel out of the buddy, or retract it if open.
 
         The panel grows out of (and retracts into) her current on-screen
         center, then parks against the left edge. Toggling mid-animation just
         reverses smoothly because the animation is restarted from wherever the
         card currently is.
         """
-        seed_center = self._sprite_label.geometry().center()
         if self._callout_panel.is_open:
-            self._callout_panel.retract(seed_center)
+            self._callout_panel.retract(self._sprite_label.geometry().center())
         else:
-            final_rect = self._callout_panel.left_slot_rect(self.height())
-            self._callout_panel.pop_out(seed_center, final_rect)
+            self._open_panel()
+
+    def _open_panel(self) -> None:
+        """Pop the daily-summary panel out of the buddy (no-op if already open)."""
+        if self._callout_panel.is_open:
+            return
+        seed_center = self._sprite_label.geometry().center()
+        final_rect = self._callout_panel.left_slot_rect(self.height())
+        self._callout_panel.pop_out(seed_center, final_rect)
+
+    # --- startup greeting ---
+
+    def _run_startup_greeting(self) -> None:
+        """Greet with the fixed welcome-back line + clip, then open the post-it.
+
+        Unlike her spontaneous talks (a random quote and a random sound), the
+        login moment is deliberately consistent: the same warm line and the same
+        recorded clip every time. It still goes through _begin_talking(), so the
+        normal recurring talk cycle resumes after it (via _on_bubble_hidden()).
+        """
+        self._begin_talking(LOGIN_GREETING, voice=LOGIN_VOICE_FILENAME)
+        self._startup_panel_timer.start(STARTUP_PANEL_DELAY_MS)
 
     # --- input ---
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
-        """Handle keys: Escape closes, Spacebar talks, "C" opens the summary, "P" pops the panel.
+        """Handle keys: Escape closes; Space talks; C opens the browser summary; P pops the panel; G replays the greeting.
 
         All require the overlay to hold keyboard focus — clicking the buddy
         gives it focus. Spacebar triggers the same talk as the timer; "C" opens
-        the callout in the default browser; "P" toggles the proof-of-concept
-        daily-summary panel that grows out of her.
+        the callout in the default browser; "P" toggles the daily-summary panel;
+        "G" replays the startup greeting + panel (handy for previewing the
+        login-time behaviour without rebooting).
         """
         if event.key() == Qt.Key.Key_Escape:
             self.close()
@@ -588,6 +661,8 @@ class BuddyOverlay(QWidget):
             self._open_callout()
         elif event.key() == Qt.Key.Key_P:
             self._toggle_panel()
+        elif event.key() == Qt.Key.Key_G:
+            self._run_startup_greeting()
         else:
             super().keyPressEvent(event)
 
@@ -613,6 +688,21 @@ def _start_callout_server() -> ThreadingHTTPServer | None:
     return server
 
 
+def _acquire_single_instance_lock() -> QLockFile | None:
+    """Take a per-user lock so only one buddy runs; return it, or None if taken.
+
+    The lock lives in the session runtime dir (falling back to the temp dir).
+    QLockFile records the owning PID, so a lock left by a crashed instance is
+    detected as stale and reclaimed automatically — only a *live* buddy blocks
+    a second launch (the case autostart-plus-manual-launch could hit).
+    """
+    runtime_dir = QStandardPaths.writableLocation(
+        QStandardPaths.StandardLocation.RuntimeLocation
+    ) or QStandardPaths.writableLocation(QStandardPaths.StandardLocation.TempLocation)
+    lock = QLockFile(str(Path(runtime_dir) / LOCK_FILE_NAME))
+    return lock if lock.tryLock(0) else None
+
+
 def main() -> int:
     """Boot the Qt event loop, start the callout server, and show the buddy.
 
@@ -629,6 +719,14 @@ def main() -> int:
     stock PyQt6 does not expose — a larger change left for a later chunk.
     """
     app = QApplication(sys.argv)
+
+    # Single instance: if a buddy is already running, bow out quietly. This is
+    # what keeps autostart-on-login from ever spawning a second girl.
+    instance_lock = _acquire_single_instance_lock()
+    if instance_lock is None:
+        print("Desktop Buddy is already running — not starting another.")
+        return 0
+
     callout_server = _start_callout_server()
     overlay = BuddyOverlay()
     overlay.showMaximized()
@@ -639,6 +737,7 @@ def main() -> int:
         if callout_server is not None:
             callout_server.shutdown()
             callout_server.server_close()
+        instance_lock.unlock()
 
 
 if __name__ == "__main__":
