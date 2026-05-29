@@ -38,3 +38,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Local app state (e.g. remembered post-it position) — machine-specific, never shared
+panel_state.json

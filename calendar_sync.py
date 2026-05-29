@@ -68,12 +68,19 @@ class CalendarEvent:
 
     `past` is True when the event's end time is already behind us (used to
     show finished events as done). All-day events are never marked past.
+
+    `start_dt` is the actual start as a timezone-aware datetime (None for
+    all-day events), used to schedule reminders; `event_id` is the calendar's
+    stable id, used to remind about each event only once. The formatted `start`
+    string stays for display.
     """
     title: str
     start: str
     end: str
     all_day: bool
     past: bool
+    start_dt: datetime | None
+    event_id: str
 
 
 # === AUTHENTICATION ===
@@ -181,21 +188,27 @@ def _todays_window() -> tuple[str, str]:
 def _to_event(item: dict) -> CalendarEvent:
     """Convert one raw API event into a display-ready CalendarEvent."""
     title = item.get("summary", "(no title)")
+    event_id = item.get("id", "")
     start = item["start"]
     end = item["end"]
 
-    # All-day events carry a "date" instead of a "dateTime".
+    # All-day events carry a "date" instead of a "dateTime"; with no start_dt
+    # the reminder logic never gives them a 15-minute countdown.
     if "date" in start:
         return CalendarEvent(
-            title=title, start="All day", end="All day", all_day=True, past=False
+            title=title, start="All day", end="All day", all_day=True, past=False,
+            start_dt=None, event_id=event_id,
         )
 
+    start_iso = start["dateTime"]
     return CalendarEvent(
         title=title,
-        start=_format_time(start["dateTime"]),
+        start=_format_time(start_iso),
         end=_format_time(end["dateTime"]),
         all_day=False,
         past=_has_passed(end["dateTime"]),
+        start_dt=datetime.fromisoformat(start_iso).astimezone(),
+        event_id=event_id,
     )
 
 
@@ -209,6 +222,39 @@ def _has_passed(iso_datetime: str) -> bool:
     """Return True if the given ISO datetime is already in the past."""
     end_time = datetime.fromisoformat(iso_datetime).astimezone()
     return end_time < datetime.now().astimezone()
+
+
+# === REMINDERS ===
+
+def due_reminders(
+    events: list[CalendarEvent],
+    now: datetime,
+    lead: timedelta,
+    already_reminded: set[str],
+) -> list[CalendarEvent]:
+    """Return events starting within `lead` of `now` that still need a reminder.
+
+    Pure scheduling logic, kept here and Qt-free so it's easy to read and test.
+    An event qualifies when:
+
+      * it has a real start time — all-day events (start_dt is None) are skipped,
+        so they never trigger a countdown reminder;
+      * its start is still ahead of us but no more than `lead` away (events that
+        already started are not "coming up"); and
+      * its id isn't already in `already_reminded`, so each event nudges once.
+
+    Results keep the input order (events arrive sorted by start time), so the
+    soonest event is first.
+    """
+    lead_seconds = lead.total_seconds()
+    due: list[CalendarEvent] = []
+    for event in events:
+        if event.start_dt is None or event.event_id in already_reminded:
+            continue
+        seconds_until_start = (event.start_dt - now).total_seconds()
+        if 0 < seconds_until_start <= lead_seconds:
+            due.append(event)
+    return due
 
 
 # === TEST ENTRY POINT ===

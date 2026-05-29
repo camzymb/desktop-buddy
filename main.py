@@ -14,15 +14,17 @@ clip, and she switches to a friendly expression before resuming her wander.
 
 # === IMPORTS ===
 
+import math
 import random
 import sys
 import threading
 import webbrowser
+from datetime import datetime, timedelta
 from enum import Enum, auto
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-from PyQt6.QtCore import QLockFile, QStandardPaths, Qt, QTimer
+from PyQt6.QtCore import QLockFile, QStandardPaths, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QGuiApplication,
     QKeyEvent,
@@ -34,6 +36,7 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import QApplication, QLabel, QWidget
 
 from audio import SoundPlayer
+from calendar_sync import CalendarEvent, due_reminders, fetch_todays_events
 from callout_panel import CalloutPanel
 from callout_server import HOST, PORT, create_server
 from quotes import MOTIVATIONAL_QUOTES
@@ -128,6 +131,35 @@ PANEL_GOAL_ITEMS: tuple[str, ...] = (
 )
 PANEL_NOTE: str = "You're doing so well. Take today one gentle step at a time."
 
+# --- Event reminders ---
+
+# Lead time: how far ahead of an event she gives a gentle heads-up. THIS is the
+# headline setting for the feature — change this one number to nudge earlier or
+# later.
+REMINDER_LEAD_MINUTES = 15
+
+# How often she checks the clock against today's events. Once a minute is plenty
+# for minute-resolution reminders and costs almost nothing.
+REMINDER_CHECK_INTERVAL_MS = 60 * 1000
+
+# How often she quietly re-pulls today's calendar in the background, so events
+# added or changed after launch still get their reminder. Kept separate from the
+# check tick above so the network fetch stays occasional.
+REMINDER_REFRESH_INTERVAL_MS = 10 * 60 * 1000
+
+# A reminder pairs a gentle bubble with a fitting recorded clip (a soft "heads
+# up", not an alarm). The 🌸 and the wording keep her kind-friend tone — a nudge,
+# never hustle. {title} is the real event name, {minutes}/{unit} the time left.
+REMINDER_VOICE_FILENAME = "voice_headsUp.mp3"
+REMINDER_MESSAGE_TEMPLATE = "{title} in {minutes} {unit} 🌸"
+
+# Test affordance: the "R" key and the --simulate-reminder launch flag both fire
+# a fake reminder so the bubble + post-it can be previewed without waiting for a
+# real event. The flag fires once, this long after she's settled on screen.
+SIMULATE_REMINDER_FLAG = "--simulate-reminder"
+SIMULATED_EVENT_TITLE = "Coffee with a friend"
+SIMULATE_REMINDER_DELAY_MS = 3000
+
 # --- Single instance ---
 
 # A per-user lock so only one buddy ever runs at a time (e.g. if autostart and
@@ -208,10 +240,15 @@ class BuddyOverlay(QWidget):
     else fall through to the desktop below.
     """
 
+    # Emitted from the background reminder-fetch thread; delivered on the GUI
+    # thread so the latest calendar snapshot is swapped in safely.
+    reminder_events_loaded = pyqtSignal(list)
+
     # --- setup ---
 
-    def __init__(self) -> None:
+    def __init__(self, *, simulate_reminder: bool = False) -> None:
         super().__init__()
+        self._simulate_reminder_on_start = simulate_reminder
         self._configure_window()
 
         # Preload every sprite already scaled to BUDDY_HEIGHT_PX tall.
@@ -277,6 +314,22 @@ class BuddyOverlay(QWidget):
         self._startup_panel_timer = QTimer(self)
         self._startup_panel_timer.setSingleShot(True)
         self._startup_panel_timer.timeout.connect(self._open_panel)
+
+        # Event reminders. _reminder_events is the latest calendar snapshot the
+        # refresh thread hands over; _reminded_event_ids remembers which events
+        # already nudged so each one fires only once. One timer re-pulls the
+        # calendar in the background, the other checks the clock against it.
+        self._reminder_events: list[CalendarEvent] = []
+        self._reminded_event_ids: set[str] = set()
+        self.reminder_events_loaded.connect(self._on_reminder_events_loaded)
+
+        self._reminder_check_timer = QTimer(self)
+        self._reminder_check_timer.setInterval(REMINDER_CHECK_INTERVAL_MS)
+        self._reminder_check_timer.timeout.connect(self._check_due_reminders)
+
+        self._reminder_refresh_timer = QTimer(self)
+        self._reminder_refresh_timer.setInterval(REMINDER_REFRESH_INTERVAL_MS)
+        self._reminder_refresh_timer.timeout.connect(self._refresh_reminder_events)
 
     def _configure_window(self) -> None:
         """Make the window frameless, transparent, always on top, and overlay-shaped.
@@ -364,9 +417,19 @@ class BuddyOverlay(QWidget):
         self._show_sprite(IDLE_SPRITE)
         self._begin_walking()
 
-        # Startup greeting: once she's settled, she says hello and opens the
-        # post-it. The recurring talk cycle then resumes via _on_bubble_hidden().
-        self._startup_timer.start(STARTUP_GREETING_DELAY_MS)
+        # Once she's settled: in test mode, preview a reminder; otherwise give
+        # the normal startup greeting (which then resumes the recurring talk
+        # cycle via _on_bubble_hidden()).
+        if self._simulate_reminder_on_start:
+            QTimer.singleShot(SIMULATE_REMINDER_DELAY_MS, self._simulate_reminder)
+        else:
+            self._startup_timer.start(STARTUP_GREETING_DELAY_MS)
+
+        # Start watching the calendar for upcoming events: fetch today's now,
+        # then keep it fresh and check the clock on their own gentle timers.
+        self._refresh_reminder_events()
+        self._reminder_check_timer.start()
+        self._reminder_refresh_timer.start()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         """Re-anchor the buddy to the floor whenever the overlay's size changes.
@@ -393,7 +456,7 @@ class BuddyOverlay(QWidget):
         if self._state == State.TALKING:
             self._position_bubble()
         if self._callout_panel.is_open:
-            self._callout_panel.reposition(self._callout_panel.left_slot_rect(self.height()))
+            self._callout_panel.reposition(self._callout_panel.parked_rect(self.height()))
         self._reposition_sprite()
 
     # --- rendering ---
@@ -626,7 +689,7 @@ class BuddyOverlay(QWidget):
         if self._callout_panel.is_open:
             return
         seed_center = self._sprite_label.geometry().center()
-        final_rect = self._callout_panel.left_slot_rect(self.height())
+        final_rect = self._callout_panel.parked_rect(self.height())
         self._callout_panel.pop_out(seed_center, final_rect)
 
     # --- startup greeting ---
@@ -642,16 +705,89 @@ class BuddyOverlay(QWidget):
         self._begin_talking(LOGIN_GREETING, voice=LOGIN_VOICE_FILENAME)
         self._startup_panel_timer.start(STARTUP_PANEL_DELAY_MS)
 
+    # --- event reminders ---
+
+    def _refresh_reminder_events(self) -> None:
+        """Kick off a background re-pull of today's calendar (timer fires this)."""
+        threading.Thread(
+            target=self._fetch_reminder_events_worker,
+            name="reminder-events",
+            daemon=True,
+        ).start()
+
+    def _fetch_reminder_events_worker(self) -> None:
+        """Fetch today's events off the GUI thread and hand them back via signal.
+
+        Reminders are a quiet background nicety, so any calendar problem
+        (offline, missing/expired sign-in) is swallowed: she simply keeps the
+        events she already had and tries again on the next refresh, never
+        interrupting with an error. Event data is only passed back for in-memory
+        scheduling — never written or logged.
+        """
+        try:
+            events = fetch_todays_events()
+        except Exception:  # noqa: BLE001 — a background nicety must never crash the app
+            return
+        self.reminder_events_loaded.emit(events)
+
+    def _on_reminder_events_loaded(self, events: list) -> None:
+        """Store the latest calendar snapshot for the checker (on the GUI thread)."""
+        self._reminder_events = events
+
+    def _check_due_reminders(self) -> None:
+        """Nudge for the soonest event now within the lead window (once each).
+
+        She gives one gentle reminder at a time: if she's already mid-bubble, or
+        several events come due together, the rest simply wait for the next tick
+        (a minute later) — so an event is only ever marked reminded once it has
+        actually been shown.
+        """
+        if self._state == State.TALKING:
+            return
+        now = datetime.now().astimezone()
+        lead = timedelta(minutes=REMINDER_LEAD_MINUTES)
+        due = due_reminders(self._reminder_events, now, lead, self._reminded_event_ids)
+        if not due:
+            return
+        event = due[0]
+        self._reminded_event_ids.add(event.event_id)
+        self._fire_reminder(event.title, event.start_dt, now)
+
+    def _fire_reminder(self, title: str, start_dt: datetime, now: datetime) -> None:
+        """Show the gentle heads-up bubble + clip and pop the post-it for one event.
+
+        Reuses her normal talking path (bubble + attention pop + the heads-up
+        voice clip) and the existing daily post-it, so a reminder looks and
+        sounds just like the rest of her, only with calendar-aware wording.
+        """
+        minutes = max(1, math.ceil((start_dt - now).total_seconds() / 60))
+        unit = "minute" if minutes == 1 else "minutes"
+        message = REMINDER_MESSAGE_TEMPLATE.format(title=title, minutes=minutes, unit=unit)
+        self._begin_talking(message, voice=REMINDER_VOICE_FILENAME)
+        self._open_panel()
+
+    def _simulate_reminder(self) -> None:
+        """Fire a fake reminder right now to preview the bubble + post-it together.
+
+        Builds a throwaway event starting one lead-time from now and runs it
+        through the real reminder path, so what you see is exactly what a genuine
+        calendar reminder looks like — no waiting for an actual event. Triggered
+        by the "R" key or the --simulate-reminder launch flag.
+        """
+        now = datetime.now().astimezone()
+        start_dt = now + timedelta(minutes=REMINDER_LEAD_MINUTES)
+        self._fire_reminder(SIMULATED_EVENT_TITLE, start_dt, now)
+
     # --- input ---
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
-        """Handle keys: Escape closes; Space talks; C opens the browser summary; P pops the panel; G replays the greeting.
+        """Handle keys: Escape closes; Space talks; C opens the browser summary; P pops the panel; G replays the greeting; R previews a reminder.
 
         All require the overlay to hold keyboard focus — clicking the buddy
         gives it focus. Spacebar triggers the same talk as the timer; "C" opens
         the callout in the default browser; "P" toggles the daily-summary panel;
-        "G" replays the startup greeting + panel (handy for previewing the
-        login-time behaviour without rebooting).
+        "G" replays the startup greeting + panel; "R" previews an event reminder
+        (bubble + post-it) without waiting for a real calendar event.
         """
         if event.key() == Qt.Key.Key_Escape:
             self.close()
@@ -663,6 +799,8 @@ class BuddyOverlay(QWidget):
             self._toggle_panel()
         elif event.key() == Qt.Key.Key_G:
             self._run_startup_greeting()
+        elif event.key() == Qt.Key.Key_R:
+            self._simulate_reminder()
         else:
             super().keyPressEvent(event)
 
@@ -728,7 +866,7 @@ def main() -> int:
         return 0
 
     callout_server = _start_callout_server()
-    overlay = BuddyOverlay()
+    overlay = BuddyOverlay(simulate_reminder=SIMULATE_REMINDER_FLAG in sys.argv)
     overlay.showMaximized()
     try:
         return app.exec()

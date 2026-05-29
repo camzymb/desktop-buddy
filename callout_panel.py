@@ -24,6 +24,7 @@ system-font fallback is used if the bundled file is ever missing.
 
 # === IMPORTS ===
 
+import json
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -125,6 +126,13 @@ PANEL_SEED_SIZE_PX = 24
 PANEL_POP_MS = 420
 PANEL_RETRACT_MS = 300
 
+# --- Dragging & remembered position ---
+# The panel is click-draggable: drag from any empty part of it to move it out of
+# the way. Its last spot is remembered in a tiny local JSON file kept OUT of the
+# repo (see .gitignore) — it holds only an on-screen coordinate, never calendar
+# or other personal data — so reopening lands where you left it.
+PANEL_STATE_PATH = PROJECT_DIR / "panel_state.json"
+
 # Hold off painting overlaid text until the card has nearly finished growing,
 # so the seed reads as a clean nub rather than clipped text.
 PANEL_CONTENT_REVEAL_FRACTION = 0.85
@@ -225,6 +233,15 @@ class CalloutPanel(QWidget):
         self._final_rect = QRect()
         self._fetch_thread: threading.Thread | None = None
 
+        # Dragging: the panel can be picked up from any empty area and moved.
+        # _saved_top_left (loaded from disk) is where it reopens; None means use
+        # the default left slot. _drag_moved guards against saving on a bare
+        # click that didn't actually move it.
+        self._dragging: bool = False
+        self._drag_moved: bool = False
+        self._drag_offset: QPoint = QPoint()
+        self._saved_top_left: QPoint | None = self._load_saved_position()
+
         self.events_loaded.connect(self._on_events_loaded)
 
         # Animates the QRect geometry for the grow/retract pop.
@@ -251,11 +268,23 @@ class CalloutPanel(QWidget):
         return self._is_open
 
     def left_slot_rect(self, overlay_height: int) -> QRect:
-        """Return the parked geometry against the left edge, vertically centred."""
+        """Return the default parked geometry against the left edge, vertically centred."""
         height = int(overlay_height * PANEL_HEIGHT_FRAC)
         width = self._width_for_height(height)
         top_y = max(0, (overlay_height - height) // 2)
         return QRect(PANEL_LEFT_MARGIN_PX, top_y, width, height)
+
+    def parked_rect(self, overlay_height: int) -> QRect:
+        """Where the panel parks when open: the user's saved spot, else the left slot.
+
+        The size always follows the current overlay height (so it scales with the
+        screen); only the position is remembered. A saved spot is clamped back
+        on-screen in case the display size changed since it was last dragged.
+        """
+        default = self.left_slot_rect(overlay_height)
+        if self._saved_top_left is None:
+            return default
+        return self._clamp_to_parent(QRect(self._saved_top_left, default.size()))
 
     def pop_out(self, seed_center: QPoint, final_rect: QRect) -> None:
         """Grow from a small seed at seed_center out to final_rect, with a pop."""
@@ -387,7 +416,12 @@ class CalloutPanel(QWidget):
     # --- interaction ---
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        """Toggle the 'done' state of whichever row was clicked."""
+        """Toggle the clicked row's 'done' state, or pick the panel up to drag it.
+
+        Clicking directly on an event/checklist row toggles it (as before);
+        clicking any empty part of the post-it instead begins a drag, so the two
+        gestures never fight each other.
+        """
         if not self._is_open:
             super().mousePressEvent(event)
             return
@@ -397,7 +431,77 @@ class CalloutPanel(QWidget):
                 row.item.done = not row.item.done
                 self.update()
                 return
+        if event.button() == Qt.MouseButton.LeftButton:
+            # Empty space: pick the panel up. Cancel any in-progress pop so the
+            # drag takes over cleanly, and remember the grab point so the panel
+            # stays under the cursor as it moves.
+            self._anim.stop()
+            self._dragging = True
+            self._drag_moved = False
+            self._drag_offset = point
+            return
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        """While dragging, keep the panel under the cursor and the mask in sync."""
+        if not self._dragging:
+            super().mouseMoveEvent(event)
+            return
+        self._drag_moved = True
+        cursor_in_parent = self.mapToParent(event.position().toPoint())
+        target = QRect(cursor_in_parent - self._drag_offset, self.size())
+        self.move(self._clamp_to_parent(target).topLeft())
+        self._on_geometry_change()
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        """Drop the panel where it was dragged and remember the spot for next time."""
+        if self._dragging:
+            self._dragging = False
+            if self._drag_moved:
+                self._saved_top_left = self.pos()
+                self._final_rect = QRect(self.pos(), self.size())
+                self._save_position()
+            return
+        super().mouseReleaseEvent(event)
+
+    def _clamp_to_parent(self, rect: QRect) -> QRect:
+        """Nudge a rect so the whole panel stays within the overlay bounds."""
+        parent = self.parentWidget()
+        if parent is None:
+            return rect
+        max_x = max(0, parent.width() - rect.width())
+        max_y = max(0, parent.height() - rect.height())
+        x = min(max(0, rect.x()), max_x)
+        y = min(max(0, rect.y()), max_y)
+        return QRect(x, y, rect.width(), rect.height())
+
+    # --- remembered position ---
+
+    def _load_saved_position(self) -> QPoint | None:
+        """Read the remembered panel top-left from the local state file, if any.
+
+        Best-effort: a missing or unreadable file just means 'use the default
+        slot', so a fresh checkout or a hand-deleted file never causes an error.
+        """
+        try:
+            data = json.loads(PANEL_STATE_PATH.read_text())
+            return QPoint(int(data["x"]), int(data["y"]))
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+
+    def _save_position(self) -> None:
+        """Write the current panel top-left to the local state file (best-effort).
+
+        Stores only the on-screen coordinate. Never raises: if the file can't be
+        written, the position simply isn't remembered next time.
+        """
+        position = self.pos()
+        try:
+            PANEL_STATE_PATH.write_text(
+                json.dumps({"x": position.x(), "y": position.y()})
+            )
+        except OSError:
+            pass
 
     # --- layout ---
 
