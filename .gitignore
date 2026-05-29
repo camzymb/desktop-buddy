@@ -41,3 +41,6 @@ Thumbs.db
 
 # Local app state (e.g. remembered post-it position) — machine-specific, never shared
 panel_state.json
+
+# Private planning docs — keep out of the public repo
+docs/content-planner-spec.md
