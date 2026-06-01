@@ -39,6 +39,9 @@ from audio import SoundPlayer
 from calendar_sync import CalendarEvent, due_reminders, fetch_todays_events
 from callout_panel import CalloutPanel
 from callout_server import HOST, PORT, create_server
+from content_planner import build_weekly_plan, load_plan_payload, write_plan
+from notion_sync import page_url, publish_plan
+from plan_panel import PlanPanel
 from quotes import MOTIVATIONAL_QUOTES
 from speech_bubble import SpeechBubble
 
@@ -160,6 +163,29 @@ SIMULATE_REMINDER_FLAG = "--simulate-reminder"
 SIMULATED_EVENT_TITLE = "Coffee with a friend"
 SIMULATE_REMINDER_DELAY_MS = 3000
 
+# --- Weekly content planner ---
+
+# The --plan-week launch flag asks her to research and draft a week of content
+# (one low-volume Anthropic API call with web search), write the full plan to
+# Notion, and show a compact overview panel on the desktop. Pair it with --mock
+# for a free SAMPLE plan with NO API call and NO Notion write — for testing the
+# panel and wiring at zero cost. It's a launch flag rather than a keypress
+# because key handling is unreliable on Wayland.
+PLAN_WEEK_FLAG = "--plan-week"
+PLAN_MOCK_FLAG = "--mock"
+
+# She gives a gentle heads-up while researching, then speaks up when ready.
+PLAN_WORKING_MESSAGE = "Working on your weekly content plan… 🌸"
+PLAN_READY_MESSAGE = "Your content plan's ready 🌸 — tap the panel for the full version in Notion."
+PLAN_MOCK_READY_MESSAGE = "Here's a sample of your weekly plan 🌸 (test mode — nothing was sent to Notion)."
+PLAN_FAILED_MESSAGE = "I hit a snag making your plan — mind trying again? 🤍"
+PLAN_NOTION_UNSET_MESSAGE = "Add your Notion page id to .env (NOTION_PAGE_ID) and I'll link you straight there. 🤍"
+PLAN_NOTION_OPEN_FAILED_MESSAGE = "I couldn't open Notion just now — sorry! 🤍"
+
+# Pressing "W" minimizes/maximizes the plan panel (clicking its header does too).
+# Fire the plan once, a beat after she's settled (mirrors the reminder preview).
+PLAN_WEEK_DELAY_MS = 3500
+
 # --- Single instance ---
 
 # A per-user lock so only one buddy ever runs at a time (e.g. if autostart and
@@ -244,11 +270,23 @@ class BuddyOverlay(QWidget):
     # thread so the latest calendar snapshot is swapped in safely.
     reminder_events_loaded = pyqtSignal(list)
 
+    # Emitted from the background content-plan thread; carries an error string
+    # ("" on success) so the result is handled safely on the GUI thread.
+    plan_ready = pyqtSignal(str)
+
     # --- setup ---
 
-    def __init__(self, *, simulate_reminder: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        simulate_reminder: bool = False,
+        plan_week: bool = False,
+        plan_week_mock: bool = False,
+    ) -> None:
         super().__init__()
         self._simulate_reminder_on_start = simulate_reminder
+        self._plan_week_on_start = plan_week
+        self._plan_week_mock = plan_week_mock
         self._configure_window()
 
         # Preload every sprite already scaled to BUDDY_HEIGHT_PX tall.
@@ -262,6 +300,8 @@ class BuddyOverlay(QWidget):
         self._callout_panel = CalloutPanel(self, self._update_input_mask)
         self._callout_panel.set_checklists(list(PANEL_MUST_DO_ITEMS), list(PANEL_GOAL_ITEMS))
         self._callout_panel.set_note(PANEL_NOTE)
+        # Compact weekly-plan overview card; links to the full plan in Notion.
+        self._plan_panel = PlanPanel(self, self._update_input_mask, self._open_notion)
         self._sound_player = SoundPlayer(SOUNDS_DIR)
 
         # Walk state. Position is initialized later in showEvent() once the
@@ -322,6 +362,7 @@ class BuddyOverlay(QWidget):
         self._reminder_events: list[CalendarEvent] = []
         self._reminded_event_ids: set[str] = set()
         self.reminder_events_loaded.connect(self._on_reminder_events_loaded)
+        self.plan_ready.connect(self._on_plan_ready)
 
         self._reminder_check_timer = QTimer(self)
         self._reminder_check_timer.setInterval(REMINDER_CHECK_INTERVAL_MS)
@@ -425,6 +466,11 @@ class BuddyOverlay(QWidget):
         else:
             self._startup_timer.start(STARTUP_GREETING_DELAY_MS)
 
+        # If asked at launch, research and open this week's content plan once
+        # she's settled (independent of the greeting above).
+        if self._plan_week_on_start:
+            QTimer.singleShot(PLAN_WEEK_DELAY_MS, self._start_weekly_plan)
+
         # Start watching the calendar for upcoming events: fetch today's now,
         # then keep it fresh and check the clock on their own gentle timers.
         self._refresh_reminder_events()
@@ -491,6 +537,8 @@ class BuddyOverlay(QWidget):
             region = region.united(QRegion(self._speech_bubble.geometry()))
         if self._callout_panel.isVisible():
             region = region.united(QRegion(self._callout_panel.geometry()))
+        if self._plan_panel.isVisible():
+            region = region.united(QRegion(self._plan_panel.geometry()))
         self.setMask(region)
 
     # --- state transitions ---
@@ -705,6 +753,90 @@ class BuddyOverlay(QWidget):
         self._begin_talking(LOGIN_GREETING, voice=LOGIN_VOICE_FILENAME)
         self._startup_panel_timer.start(STARTUP_PANEL_DELAY_MS)
 
+    # --- weekly content planner ---
+
+    def _start_weekly_plan(self) -> None:
+        """Give a gentle heads-up and research this week's plan in the background."""
+        self._begin_talking(PLAN_WORKING_MESSAGE, play_voice=False)
+        threading.Thread(
+            target=self._generate_plan_worker, name="weekly-plan", daemon=True
+        ).start()
+
+    def _generate_plan_worker(self) -> None:
+        """Build the plan off the GUI thread, save it, publish it, and report back.
+
+        build_weekly_plan and publish_plan both handle expected problems (missing
+        key/token, offline, an unparseable reply, an unshared page) by returning a
+        friendly message rather than raising, so there's always something kind to
+        show. We still guard the unexpected so a failure here can never take the
+        buddy down. The plan is saved for the panel to read; the signal carries a
+        status string ("" on success) to the GUI thread.
+        """
+        try:
+            plan = build_weekly_plan(use_mock=self._plan_week_mock)
+        except Exception:  # noqa: BLE001 — a background nicety must never crash the app
+            plan = {"error": PLAN_FAILED_MESSAGE}
+        write_plan(plan)
+
+        if "error" in plan:
+            status = plan["error"]          # generation failed (e.g. missing key)
+        elif self._plan_week_mock:
+            status = ""                      # mock: panel only, never touch Notion
+        else:
+            status = publish_plan(plan)      # write the full plan to Notion
+        self.plan_ready.emit(status)
+
+    def _on_plan_ready(self, status: str) -> None:
+        """Show the compact overview panel and give a gentle spoken update.
+
+        `status` is empty on full success, or a friendly message describing a
+        problem. When the plan itself was built (it has pieces) the panel is
+        shown regardless, so a Notion-only hiccup still leaves the overview up
+        with the issue explained out loud.
+        """
+        plan = load_plan_payload()
+        pieces = plan.get("pieces") or []
+        if pieces:
+            rows = [
+                (piece.get("day", ""), piece.get("format", ""),
+                 piece.get("topic") or piece.get("idea", ""))
+                for piece in pieces
+            ]
+            self._plan_panel.set_overview(plan.get("week_of", ""), rows)
+            if self._plan_panel.is_open:
+                self._plan_panel.raise_()
+                self._update_input_mask()
+            else:
+                self._plan_panel.show_panel()
+
+        if not pieces:
+            message = status or PLAN_FAILED_MESSAGE
+        elif status:
+            message = status
+        elif self._plan_week_mock:
+            message = PLAN_MOCK_READY_MESSAGE
+        else:
+            message = PLAN_READY_MESSAGE
+        self._begin_talking(message, play_voice=False)
+
+    def _toggle_plan_panel(self) -> None:
+        """Minimize/maximize the plan panel if it's on screen (the 'W' key)."""
+        if self._plan_panel.is_open:
+            self._plan_panel.toggle_minimized()
+
+    def _open_notion(self) -> None:
+        """Open the full plan in Notion (the panel's link), with friendly fallbacks."""
+        url = page_url()
+        if not url:
+            self._begin_talking(PLAN_NOTION_UNSET_MESSAGE, play_voice=False)
+            return
+        try:
+            opened = webbrowser.open(url)
+        except OSError:
+            opened = False
+        if not opened:
+            self._begin_talking(PLAN_NOTION_OPEN_FAILED_MESSAGE, play_voice=False)
+
     # --- event reminders ---
 
     def _refresh_reminder_events(self) -> None:
@@ -781,13 +913,14 @@ class BuddyOverlay(QWidget):
     # --- input ---
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
-        """Handle keys: Escape closes; Space talks; C opens the browser summary; P pops the panel; G replays the greeting; R previews a reminder.
+        """Handle keys: Escape closes; Space talks; C opens the browser summary; P pops the panel; G replays the greeting; R previews a reminder; W minimizes the plan panel.
 
         All require the overlay to hold keyboard focus — clicking the buddy
         gives it focus. Spacebar triggers the same talk as the timer; "C" opens
         the callout in the default browser; "P" toggles the daily-summary panel;
         "G" replays the startup greeting + panel; "R" previews an event reminder
-        (bubble + post-it) without waiting for a real calendar event.
+        (bubble + post-it) without waiting for a real calendar event; "W"
+        minimizes/maximizes the weekly-plan panel.
         """
         if event.key() == Qt.Key.Key_Escape:
             self.close()
@@ -801,6 +934,8 @@ class BuddyOverlay(QWidget):
             self._run_startup_greeting()
         elif event.key() == Qt.Key.Key_R:
             self._simulate_reminder()
+        elif event.key() == Qt.Key.Key_W:
+            self._toggle_plan_panel()
         else:
             super().keyPressEvent(event)
 
@@ -866,7 +1001,11 @@ def main() -> int:
         return 0
 
     callout_server = _start_callout_server()
-    overlay = BuddyOverlay(simulate_reminder=SIMULATE_REMINDER_FLAG in sys.argv)
+    overlay = BuddyOverlay(
+        simulate_reminder=SIMULATE_REMINDER_FLAG in sys.argv,
+        plan_week=PLAN_WEEK_FLAG in sys.argv,
+        plan_week_mock=PLAN_MOCK_FLAG in sys.argv,
+    )
     overlay.showMaximized()
     try:
         return app.exec()

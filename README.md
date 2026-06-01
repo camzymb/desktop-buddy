@@ -44,7 +44,49 @@ python3 -m venv .venv
 
 To have her greet you automatically at login, run `scripts/setup_autostart.sh`.
 
-> Your private data stays yours: calendar credentials and tokens live only on your machine and are never committed to this repo.
+## 🗓️ Weekly content planner
+
+She can also act as a gentle **content strategist**: she researches what's
+current — recent AI/marketing-tech launches and the hook styles working right
+now — and drafts a week of social content built around the Instagram grid
+(Monday carousel, Wednesday reel, Friday post). She shows the week at a glance in
+a small, draggable **desktop panel** (drag the header to move it, click the
+header or press **W** to minimize/maximize), and writes the **full** detailed
+plan — ideas with their "why", drafted copy, slide-by-slide breakdowns,
+multi-platform fit notes, and GEO/SEO tips — to your **Notion** page, which the
+panel links to.
+
+The research is one small call to the **Anthropic API** (using its built-in web
+search); the write-up uses the **Notion API**. Both are **bring-your-own-key**,
+loaded from a gitignored `.env`:
+
+```bash
+# 1. Copy the template and add your own values (this .env is gitignored — never committed)
+cp .env.example .env
+#    then edit .env and set:
+#      ANTHROPIC_API_KEY=sk-ant-...      (https://console.anthropic.com/ → API keys)
+#      NOTION_TOKEN=ntn_...              (https://www.notion.so/my-integrations)
+#      NOTION_PAGE_ID=...                (the page's 32-char id, from its URL)
+#    then share that Notion page with your integration:
+#      open the page → ••• → Connections → add your integration
+```
+
+```bash
+# 2. Preview a free SAMPLE plan first — no API call, no Notion write, no cost.
+#    This launches the buddy and pops the compact panel with sample data:
+.venv/bin/python main.py --plan-week --mock
+
+# 3. When the panel looks right, run ONE real test: research + write to Notion,
+#    then check your Notion page to confirm it appears:
+.venv/bin/python content_planner.py
+```
+
+You can also have her do the real run at launch with
+`.venv/bin/python main.py --plan-week`.
+
+> Your keys stay on your machine: they live only in your local `.env`
+> (gitignored) and are never committed. If anything is missing she shows a
+> friendly note instead of erroring, and your generated plan is kept local too.
 
 ## 🔤 Credits
 

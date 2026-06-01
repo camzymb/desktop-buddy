@@ -39,8 +39,13 @@ Thumbs.db
 # Logs
 *.log
 
-# Local app state (e.g. remembered post-it position) — machine-specific, never shared
+# Local app state (e.g. remembered panel positions) — machine-specific, never shared
 panel_state.json
+plan_panel_state.json
+
+# Generated weekly content plan — your own content ideas, kept local (the full
+# plan lives in Notion); regenerated on demand, never committed.
+weekly_plan.json
 
 # Private planning docs — keep out of the public repo
 docs/content-planner-spec.md
