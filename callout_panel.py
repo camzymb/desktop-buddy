@@ -14,6 +14,12 @@ and fades it ("done"), matching the browser callout. Events that have already
 ended start done. The panel animates its own geometry from a small seed near
 the buddy out to its parked slot, so it looks like it grows out of her.
 
+It can be dragged anywhere (grab an empty area) and resized like a window: grab
+the top/bottom edge or a corner to make it shorter or taller. The planner is
+painted at its full size, so the text stays the same readable size; when the
+window is shorter than the planner the content scrolls (mouse wheel), with a slim
+scrollbar. Its dragged position and chosen height are remembered between launches.
+
 Privacy: calendar data is held only in memory for painting and is never written
 to disk or logged, per the project's security rules.
 
@@ -39,6 +45,7 @@ from PyQt6.QtCore import (
     QPropertyAnimation,
     QRect,
     QRectF,
+    QSize,
     Qt,
     pyqtSignal,
 )
@@ -53,6 +60,7 @@ from PyQt6.QtGui import (
     QPen,
     QPixmap,
     QPolygonF,
+    QWheelEvent,
 )
 from PyQt6.QtWidgets import QWidget
 
@@ -126,12 +134,31 @@ PANEL_SEED_SIZE_PX = 24
 PANEL_POP_MS = 420
 PANEL_RETRACT_MS = 300
 
-# --- Dragging & remembered position ---
-# The panel is click-draggable: drag from any empty part of it to move it out of
-# the way. Its last spot is remembered in a tiny local JSON file kept OUT of the
-# repo (see .gitignore) — it holds only an on-screen coordinate, never calendar
-# or other personal data — so reopening lands where you left it.
+# --- Dragging, resizing & remembered geometry ---
+# The panel is click-draggable (drag any empty part to move it) and height-
+# resizable (see below). Its last position AND height are remembered in a tiny
+# local JSON file kept OUT of the repo (see .gitignore) — it holds only on-screen
+# geometry, never calendar or other personal data — so reopening matches.
 PANEL_STATE_PATH = PROJECT_DIR / "panel_state.json"
+
+# --- Resizing (browser-style window + scroll) ---
+# The planner is painted at its full natural size (so the text stays the same,
+# readable size); the card is a resizable WINDOW onto it. Grab any edge or
+# corner (within this margin) to make the window narrower/wider or shorter/
+# taller; when it's smaller than the full planner, the content scrolls (mouse
+# wheel vertically, Shift+wheel horizontally), with slim scrollbars. The full
+# planner size is the default and the maximum (no scrollbars at full size).
+RESIZE_MARGIN_PX = 12
+# Smallest the window may get in each dimension, as a fraction of the full
+# planner size (keeps it usable); the largest is the full planner (the default).
+PANEL_MIN_VIEW_FRAC = 0.32
+# Pixels scrolled per mouse-wheel notch.
+SCROLL_STEP_PX = 90
+# Slim scrollbar shown on the right when the window is shorter than the planner.
+SCROLLBAR_WIDTH_PX = 5
+SCROLLBAR_MARGIN_PX = 4
+SCROLLBAR_MIN_THUMB_PX = 28
+SCROLLBAR_COLOR = QColor(120, 108, 112, 130)
 
 # Hold off painting overlaid text until the card has nearly finished growing,
 # so the seed reads as a clean nub rather than clipped text.
@@ -240,7 +267,21 @@ class CalloutPanel(QWidget):
         self._dragging: bool = False
         self._drag_moved: bool = False
         self._drag_offset: QPoint = QPoint()
-        self._saved_top_left: QPoint | None = self._load_saved_position()
+        self._saved_top_left, self._saved_view_size = self._load_saved_state()
+
+        # Resizing: grab any edge or corner to change the window's width and/or
+        # height; the planner is painted full-size and scrolled inside it.
+        # _saved_view_size (loaded above) is remembered across launches; the
+        # _scroll_* are the current scroll offsets into the full-size planner.
+        self._resizing: bool = False
+        self._resize_moved: bool = False
+        self._resize_edges: tuple[bool, bool, bool, bool] = (False, False, False, False)
+        self._resize_start_rect: QRect = QRect()
+        self._resize_start_mouse: QPoint = QPoint()
+        self._scroll_x: int = 0
+        self._scroll_y: int = 0
+        # Track the cursor even with no button held, so edges show a resize arrow.
+        self.setMouseTracking(True)
 
         self.events_loaded.connect(self._on_events_loaded)
 
@@ -275,22 +316,30 @@ class CalloutPanel(QWidget):
         return QRect(PANEL_LEFT_MARGIN_PX, top_y, width, height)
 
     def parked_rect(self, overlay_height: int) -> QRect:
-        """Where the panel parks when open: the user's saved spot, else the left slot.
+        """Where the panel parks when open: the user's saved spot and size, else the
+        default left slot (the full planner — the original size).
 
-        The size always follows the current overlay height (so it scales with the
-        screen); only the position is remembered. A saved spot is clamped back
-        on-screen in case the display size changed since it was last dragged.
+        The window is a resizable viewport onto the full-size planner; its width
+        and height are both remembered. A saved size is clamped to the min/full-
+        planner range, and the position is clamped back on-screen, in case the
+        display changed since it was set.
         """
-        default = self.left_slot_rect(overlay_height)
-        if self._saved_top_left is None:
-            return default
-        return self._clamp_to_parent(QRect(self._saved_top_left, default.size()))
+        default = self.left_slot_rect(overlay_height)  # full planner (the max / original)
+        size = self._clamped_view_size(
+            self._saved_view_size if self._saved_view_size is not None else default.size(),
+            default.size(),
+        )
+        top_left = self._saved_top_left if self._saved_top_left is not None else default.topLeft()
+        return self._clamp_to_parent(QRect(top_left, size))
 
     def pop_out(self, seed_center: QPoint, final_rect: QRect) -> None:
         """Grow from a small seed at seed_center out to final_rect, with a pop."""
         self._is_open = True
         self._final_rect = final_rect
-        self._rescale_background(final_rect.size().width(), final_rect.size().height())
+        self._scroll_x = 0  # always open scrolled to the top-left
+        self._scroll_y = 0
+        content_w, content_h = self._content_size()
+        self._rescale_background(content_w, content_h)
         self._refresh_date()
         self._request_events_once()
         self.setGeometry(self._seed_rect(seed_center))
@@ -307,8 +356,10 @@ class CalloutPanel(QWidget):
         """Snap to a freshly computed slot (e.g. after the overlay resizes)."""
         self._final_rect = final_rect
         if self._is_open and self._anim.state() != QAbstractAnimation.State.Running:
-            self._rescale_background(final_rect.width(), final_rect.height())
+            content_w, content_h = self._content_size()
+            self._rescale_background(content_w, content_h)
             self.setGeometry(final_rect)
+            self._clamp_scroll()
             self._on_geometry_change()
 
     # --- sizing helpers ---
@@ -318,6 +369,50 @@ class CalloutPanel(QWidget):
         if self._background.isNull() or self._background.height() == 0:
             return height // 2
         return int(height * self._background.width() / self._background.height())
+
+    def _height_for_width(self, width: int) -> int:
+        """Height that preserves the background image's aspect ratio for a width."""
+        if self._background.isNull() or self._background.width() == 0:
+            return width * 2
+        return int(width * self._background.height() / self._background.width())
+
+    def _clamped_view_size(self, size: QSize, full_size: QSize) -> QSize:
+        """Clamp a window size between the minimum and the full planner size."""
+        min_w = int(full_size.width() * PANEL_MIN_VIEW_FRAC)
+        min_h = int(full_size.height() * PANEL_MIN_VIEW_FRAC)
+        width = max(min_w, min(size.width(), full_size.width()))
+        height = max(min_h, min(size.height(), full_size.height()))
+        return QSize(width, height)
+
+    def _content_size(self) -> tuple[int, int]:
+        """Full natural (width, height) of the planner, sized to the overlay height.
+
+        This is fixed by the screen, NOT the window, so the planner — and its
+        text — stay one constant size while the window resizes around them.
+        """
+        parent = self.parentWidget()
+        overlay_height = parent.height() if parent is not None else self.height()
+        height = int(overlay_height * PANEL_HEIGHT_FRAC)
+        return self._width_for_height(height), height
+
+    def _content_height(self) -> int:
+        """Full painted height of the planner (content space)."""
+        return self._content_size()[1]
+
+    def _content_width(self) -> int:
+        """Full painted width of the planner (content space)."""
+        return self._content_size()[0]
+
+    def _max_scroll(self) -> tuple[int, int]:
+        """How far the content can scroll horizontally and vertically."""
+        content_w, content_h = self._content_size()
+        return max(0, content_w - self.width()), max(0, content_h - self.height())
+
+    def _clamp_scroll(self) -> None:
+        """Keep both scroll offsets within range (e.g. after a resize)."""
+        max_x, max_y = self._max_scroll()
+        self._scroll_x = max(0, min(self._scroll_x, max_x))
+        self._scroll_y = max(0, min(self._scroll_y, max_y))
 
     def _rescale_background(self, width: int, height: int) -> None:
         """Cache the artwork scaled to the parked size for crisp, cheap repaints."""
@@ -425,9 +520,29 @@ class CalloutPanel(QWidget):
         if not self._is_open:
             super().mousePressEvent(event)
             return
+        # Pressing the card brings it above the other desktop cards.
+        self.raise_()
+        self._on_geometry_change()
         point = event.position().toPoint()
+
+        # Any edge or corner grab starts a resize (precedence over the row toggle
+        # and drag, but only in the thin border).
+        if event.button() == Qt.MouseButton.LeftButton:
+            edges = self._edges_at(point)
+            if any(edges):
+                self._anim.stop()
+                self._resizing = True
+                self._resize_moved = False
+                self._resize_edges = edges
+                self._resize_start_rect = self.geometry()
+                self._resize_start_mouse = self.mapToParent(point)
+                return
+
+        # Rows are laid out in full-planner (content) coordinates, so map the
+        # click by the scroll offset before testing which row it hit.
+        content_point = QPoint(point.x() + self._scroll_x, point.y() + self._scroll_y)
         for row in self._interactive_rows():
-            if row.hit_rect.contains(point):
+            if row.hit_rect.contains(content_point):
                 row.item.done = not row.item.done
                 self.update()
                 return
@@ -443,26 +558,117 @@ class CalloutPanel(QWidget):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        """While dragging, keep the panel under the cursor and the mask in sync."""
-        if not self._dragging:
-            super().mouseMoveEvent(event)
+        """Resize or drag the panel, or show the right cursor when just hovering."""
+        point = event.position().toPoint()
+        if self._resizing:
+            self._perform_resize(self.mapToParent(point))
             return
-        self._drag_moved = True
-        cursor_in_parent = self.mapToParent(event.position().toPoint())
-        target = QRect(cursor_in_parent - self._drag_offset, self.size())
-        self.move(self._clamp_to_parent(target).topLeft())
-        self._on_geometry_change()
+        if self._dragging:
+            self._drag_moved = True
+            cursor_in_parent = self.mapToParent(point)
+            target = QRect(cursor_in_parent - self._drag_offset, self.size())
+            self.move(self._clamp_to_parent(target).topLeft())
+            self._on_geometry_change()
+            return
+        # Idle hover: a resize arrow near the edges, the normal cursor elsewhere.
+        if self._is_open:
+            self.setCursor(self._cursor_for_edges(self._edges_at(point)))
+        super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        """Drop the panel where it was dragged and remember the spot for next time."""
+        """Finish a resize or drag and remember the new geometry for next time."""
+        if self._resizing:
+            self._resizing = False
+            if self._resize_moved:
+                self._saved_view_size = self.size()
+                self._saved_top_left = self.pos()
+                self._final_rect = self.geometry()
+                self._save_state()
+            return
         if self._dragging:
             self._dragging = False
             if self._drag_moved:
                 self._saved_top_left = self.pos()
                 self._final_rect = QRect(self.pos(), self.size())
-                self._save_position()
+                self._save_state()
             return
         super().mouseReleaseEvent(event)
+
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        """Scroll the planner inside the window: wheel vertical, Shift+wheel horizontal."""
+        max_x, max_y = self._max_scroll()
+        if not self._is_open or (max_x == 0 and max_y == 0):
+            super().wheelEvent(event)
+            return
+        notches_y = event.angleDelta().y() / 120.0  # one notch ≈ 120
+        notches_x = event.angleDelta().x() / 120.0
+        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+            self._scroll_x -= int(notches_y * SCROLL_STEP_PX)
+        else:
+            self._scroll_y -= int(notches_y * SCROLL_STEP_PX)
+            self._scroll_x -= int(notches_x * SCROLL_STEP_PX)
+        self._clamp_scroll()
+        self.update()
+
+    def _edges_at(self, point: QPoint) -> tuple[bool, bool, bool, bool]:
+        """Which edges (left, right, top, bottom) the point is within grab range of."""
+        margin = RESIZE_MARGIN_PX
+        return (
+            point.x() <= margin,
+            point.x() >= self.width() - margin,
+            point.y() <= margin,
+            point.y() >= self.height() - margin,
+        )
+
+    @staticmethod
+    def _cursor_for_edges(edges: tuple[bool, bool, bool, bool]) -> Qt.CursorShape:
+        """Pick the resize cursor for the active edge/corner, or the normal arrow."""
+        left, right, top, bottom = edges
+        if (left and top) or (right and bottom):
+            return Qt.CursorShape.SizeFDiagCursor
+        if (right and top) or (left and bottom):
+            return Qt.CursorShape.SizeBDiagCursor
+        if left or right:
+            return Qt.CursorShape.SizeHorCursor
+        if top or bottom:
+            return Qt.CursorShape.SizeVerCursor
+        return Qt.CursorShape.ArrowCursor
+
+    def _perform_resize(self, cursor_in_parent: QPoint) -> None:
+        """Resize the window's width and/or height as an edge or corner is dragged.
+
+        The planner is painted at its full size; the window is just a viewport, so
+        each dimension is clamped between the minimum and the full planner size.
+        The un-dragged edges stay anchored and the scroll offsets are re-clamped so
+        the content stays in view.
+        """
+        self._resize_moved = True
+        left, right, top, bottom = self._resize_edges
+        start = self._resize_start_rect
+        dx = cursor_in_parent.x() - self._resize_start_mouse.x()
+        dy = cursor_in_parent.y() - self._resize_start_mouse.y()
+
+        new_w, new_h = start.width(), start.height()
+        if right:
+            new_w = start.width() + dx
+        if left:
+            new_w = start.width() - dx
+        if bottom:
+            new_h = start.height() + dy
+        if top:
+            new_h = start.height() - dy
+
+        content_w, content_h = self._content_size()
+        size = self._clamped_view_size(QSize(new_w, new_h), QSize(content_w, content_h))
+        new_x = (start.right() + 1 - size.width()) if left else start.x()
+        new_y = (start.bottom() + 1 - size.height()) if top else start.y()
+        new_rect = self._clamp_to_parent(QRect(QPoint(new_x, new_y), size))
+
+        self._final_rect = new_rect
+        self.setGeometry(new_rect)
+        self._clamp_scroll()
+        self._on_geometry_change()
+        self.update()
 
     def _clamp_to_parent(self, rect: QRect) -> QRect:
         """Nudge a rect so the whole panel stays within the overlay bounds."""
@@ -477,28 +683,40 @@ class CalloutPanel(QWidget):
 
     # --- remembered position ---
 
-    def _load_saved_position(self) -> QPoint | None:
-        """Read the remembered panel top-left from the local state file, if any.
+    def _load_saved_state(self) -> tuple[QPoint | None, QSize | None]:
+        """Read the remembered panel position and window size from the state file.
 
-        Best-effort: a missing or unreadable file just means 'use the default
-        slot', so a fresh checkout or a hand-deleted file never causes an error.
+        Best-effort and tolerant: a missing/unreadable file — or an older one that
+        saved only the position — just means 'use the default' for whatever's
+        absent, so a fresh checkout never errors. Only on-screen geometry is
+        stored, never calendar data.
         """
         try:
             data = json.loads(PANEL_STATE_PATH.read_text())
-            return QPoint(int(data["x"]), int(data["y"]))
-        except (OSError, ValueError, KeyError, TypeError):
-            return None
+        except (OSError, ValueError):
+            return None, None
+        try:
+            point = QPoint(int(data["x"]), int(data["y"]))
+        except (KeyError, TypeError, ValueError):
+            point = None
+        try:
+            size = QSize(int(data["w"]), int(data["h"]))
+            if size.width() <= 0 or size.height() <= 0:
+                size = None
+        except (KeyError, TypeError, ValueError):
+            size = None
+        return point, size
 
-    def _save_position(self) -> None:
-        """Write the current panel top-left to the local state file (best-effort).
+    def _save_state(self) -> None:
+        """Write the current panel position and window size to the state file.
 
-        Stores only the on-screen coordinate. Never raises: if the file can't be
-        written, the position simply isn't remembered next time.
+        Stores only on-screen geometry. Never raises: if the file can't be
+        written, the panel simply won't remember its spot or size next time.
         """
-        position = self.pos()
+        rect = self.geometry()
         try:
             PANEL_STATE_PATH.write_text(
-                json.dumps({"x": position.x(), "y": position.y()})
+                json.dumps({"x": rect.x(), "y": rect.y(), "w": rect.width(), "h": rect.height()})
             )
         except OSError:
             pass
@@ -531,8 +749,7 @@ class CalloutPanel(QWidget):
         if not items:
             return rows
 
-        width = self.width()
-        height = self.height()
+        width, height = self._content_size()  # full planner size; rows live in content space
         box_x, box_y, box_w, box_h = box_frac
         pad_x = int(width * BOX_PAD_X_FRAC)
         pad_y = int(height * BOX_PAD_Y_FRAC)
@@ -562,15 +779,24 @@ class CalloutPanel(QWidget):
     # --- painting ---
 
     def paintEvent(self, event: QPaintEvent) -> None:
-        """Draw the artwork background, then (once grown) today's content."""
+        """Draw the full-size planner scrolled into the window, then a scrollbar.
+
+        The artwork and text are painted at the planner's full natural height
+        (so the text size never changes), shifted up by the scroll offset and
+        clipped to the window — that's what makes the window scroll instead of
+        zoom. A slim scrollbar is drawn on top when there's more to scroll to.
+        """
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
-        if not self._background_scaled.isNull():
-            painter.drawPixmap(self.rect(), self._background_scaled)
-        elif not self._background.isNull():
-            painter.drawPixmap(self.rect(), self._background)
+        content_w, content_h = self._content_size()
+        painter.save()
+        painter.translate(-self._scroll_x, -self._scroll_y)
+
+        background = self._background_scaled if not self._background_scaled.isNull() else self._background
+        if not background.isNull():
+            painter.drawPixmap(QRect(0, 0, content_w, content_h), background)
 
         grown_enough = (
             self.width() >= self._final_rect.width() * PANEL_CONTENT_REVEAL_FRACTION
@@ -578,6 +804,30 @@ class CalloutPanel(QWidget):
         )
         if grown_enough and not self._final_rect.isEmpty():
             self._paint_content(painter)
+        painter.restore()
+
+        self._paint_scrollbars(painter, content_w, content_h)
+
+    def _paint_scrollbars(self, painter: QPainter, content_w: int, content_h: int) -> None:
+        """Draw slim scrollbars (right and/or bottom) when the planner exceeds the window."""
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(SCROLLBAR_COLOR)
+        radius = SCROLLBAR_WIDTH_PX / 2
+        view_w, view_h = self.width(), self.height()
+
+        max_y = content_h - view_h
+        if max_y > 0:
+            thumb_h = max(SCROLLBAR_MIN_THUMB_PX, int(view_h * view_h / content_h))
+            thumb_y = int((view_h - thumb_h) * (self._scroll_y / max_y))
+            x = view_w - SCROLLBAR_WIDTH_PX - SCROLLBAR_MARGIN_PX
+            painter.drawRoundedRect(QRectF(x, thumb_y + 2, SCROLLBAR_WIDTH_PX, thumb_h - 4), radius, radius)
+
+        max_x = content_w - view_w
+        if max_x > 0:
+            thumb_w = max(SCROLLBAR_MIN_THUMB_PX, int(view_w * view_w / content_w))
+            thumb_x = int((view_w - thumb_w) * (self._scroll_x / max_x))
+            y = view_h - SCROLLBAR_WIDTH_PX - SCROLLBAR_MARGIN_PX
+            painter.drawRoundedRect(QRectF(thumb_x + 2, y, thumb_w - 4, SCROLLBAR_WIDTH_PX), radius, radius)
 
     def _paint_content(self, painter: QPainter) -> None:
         """Paint the date, events, checklists and note over the artwork."""
@@ -590,31 +840,38 @@ class CalloutPanel(QWidget):
 
     def _paint_date(self, painter: QPainter) -> None:
         """Draw today's date centred inside the empty Date box."""
-        font = _panel_font(int(self.height() * DATE_FONT_FRAC), bold=True)
+        font = _panel_font(int(self._content_height() * DATE_FONT_FRAC), bold=True)
         painter.setFont(font)
         painter.setPen(DATE_COLOR)
         painter.drawText(self._box_rect(DATE_BOX_FRAC), int(Qt.AlignmentFlag.AlignCenter), self._date_text)
 
     def _box_rect(self, box_frac: tuple[float, float, float, float]) -> QRect:
-        """Convert a (x, y, w, h) fractional box to a pixel QRect at the current size."""
+        """Convert a (x, y, w, h) fractional box to a pixel QRect in content space.
+
+        Heights use the full planner height (content space), not the window
+        height, so the boxes — and the text in them — keep a constant size as the
+        window is resized; the scroll offset is applied by the painter transform.
+        """
         x_frac, y_frac, w_frac, h_frac = box_frac
+        content_w, content_h = self._content_size()
         return QRect(
-            int(self.width() * x_frac), int(self.height() * y_frac),
-            int(self.width() * w_frac), int(self.height() * h_frac),
+            int(content_w * x_frac), int(content_h * y_frac),
+            int(content_w * w_frac), int(content_h * h_frac),
         )
 
     def _paint_events(self, painter: QPainter) -> None:
         """Draw event rows inside the events box, or a friendly message."""
-        font = _panel_font(int(self.height() * EVENT_FONT_FRAC), bold=True)
+        font = _panel_font(int(self._content_height() * EVENT_FONT_FRAC), bold=True)
         if self._events_state != "ok":
             painter.setFont(font)
             painter.setPen(TEXT_COLOR)
             box_x, box_y, box_w, box_h = EVENTS_BOX_FRAC
-            pad_x = int(self.width() * BOX_PAD_X_FRAC)
-            pad_y = int(self.height() * BOX_PAD_Y_FRAC)
+            content_w, content_h = self._content_size()
+            pad_x = int(content_w * BOX_PAD_X_FRAC)
+            pad_y = int(content_h * BOX_PAD_Y_FRAC)
             message_rect = QRect(
-                int(self.width() * box_x) + pad_x, int(self.height() * box_y) + pad_y,
-                int(self.width() * box_w) - 2 * pad_x, int(self.height() * box_h) - 2 * pad_y,
+                int(content_w * box_x) + pad_x, int(content_h * box_y) + pad_y,
+                int(content_w * box_w) - 2 * pad_x, int(content_h * box_h) - 2 * pad_y,
             )
             painter.drawText(
                 message_rect,
@@ -623,7 +880,7 @@ class CalloutPanel(QWidget):
             )
             return
 
-        done_font = _panel_font(int(self.height() * EVENT_FONT_FRAC), bold=True, strike=True)
+        done_font = _panel_font(int(self._content_height() * EVENT_FONT_FRAC), bold=True, strike=True)
         for row in self._interactive_rows():
             if row.time_label is None:
                 continue
@@ -656,7 +913,7 @@ class CalloutPanel(QWidget):
             radius = row.box_rect.width() * 0.25
             painter.drawRoundedRect(QRectF(row.box_rect), radius, radius)
 
-        font = _panel_font(int(self.height() * CHECK_FONT_FRAC), bold=True, strike=item.done)
+        font = _panel_font(int(self._content_height() * CHECK_FONT_FRAC), bold=True, strike=item.done)
         painter.setFont(font)
         painter.setPen(DONE_COLOR if item.done else TEXT_COLOR)
         metrics = QFontMetrics(font)
@@ -687,10 +944,11 @@ class CalloutPanel(QWidget):
 
     def _paint_note(self, painter: QPainter) -> None:
         """Draw the short, word-wrapped note inside the note box, with padding."""
-        pad_x = int(self.width() * BOX_PAD_X_FRAC)
-        pad_y = int(self.height() * BOX_PAD_Y_FRAC)
+        content_w, content_h = self._content_size()
+        pad_x = int(content_w * BOX_PAD_X_FRAC)
+        pad_y = int(content_h * BOX_PAD_Y_FRAC)
         note_rect = self._box_rect(NOTE_BOX_FRAC).adjusted(pad_x, pad_y, -pad_x, -pad_y)
-        painter.setFont(_panel_font(int(self.height() * NOTE_FONT_FRAC), bold=True))
+        painter.setFont(_panel_font(int(content_h * NOTE_FONT_FRAC), bold=True))
         painter.setPen(NOTE_COLOR)
         painter.drawText(
             note_rect,

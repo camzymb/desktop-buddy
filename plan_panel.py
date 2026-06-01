@@ -262,6 +262,9 @@ class PlanPanel(QWidget):
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         """Start a possible drag when the header is pressed."""
+        # Pressing the card brings it above the other desktop cards.
+        self.raise_()
+        self._on_geometry_change()
         if event.button() == Qt.MouseButton.LeftButton and self._on_header(event):
             self._dragging = False
             self._press_pos = event.position().toPoint()
