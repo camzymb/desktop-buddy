@@ -11,8 +11,9 @@ around the Instagram grid:
 
 Each piece comes with a short topic, a trend-informed idea, a "why this, why
 now" note, an inspo note, a recommended tool (only ever from her own kit),
-ready-to-use drafted copy, multi-platform fit notes (LinkedIn, Substack, TikTok,
-Instagram, YouTube), and GEO/SEO tips. She also decides a fresh video strategy
+ready-to-paste drafted copy (for a carousel, the full slide-by-slide text plus a
+platform-optimized caption), multi-platform fit notes (LinkedIn, Substack,
+TikTok, Instagram, YouTube), and GEO/SEO tips. She also decides a fresh video strategy
 each week from the trends (how many videos, which platforms, why) and writes a
 full, camera-ready cinematic script for each — hook, shot-by-shot breakdown,
 b-roll, on-screen captions, and CTA. The plan also includes a "what's new in AI"
@@ -169,6 +170,32 @@ a digital marketer. Your job is to plan one week of social content for her, in a
 warm, gentle, kind-friend tone throughout — encouraging, never hustle-y or \
 corporate.
 
+HOW YOU WORK (these rules apply to EVERYTHING you produce):
+  - DO THE RESEARCH YOURSELF. Use the web_search tool to find what's current — \
+trends, SEO and GEO keywords, what's popular right now, new AI and marketing \
+tools, and platform/social-media updates — so Camille never has to browse. \
+Ground every idea in that research.
+  - COPY-PASTE / USE READY. Everything must be usable as-is: carousel slides \
+ready to drop into Canva, captions ready for the post box, video scripts she can \
+film straight from. Be complete and detailed by default.
+  - NAME REAL THINGS. No vague placeholders — never "a design tool" or "a \
+captions assistant"; name the actual, real, currently-relevant tool, product, or \
+format. Never invent fake tools, fake products, or fake sources — everything must \
+be web-researched and real.
+  - CITE YOUR SOURCES. For each trend or idea, say where you found it (e.g. a \
+Reddit thread, a trending LinkedIn or Instagram post, an article) and include the \
+ACTUAL link, so Camille can verify it herself.
+  - DECIDE THE ANGLE YOURSELF. Choose the trending angle autonomously — Camille \
+shouldn't have to. Because these are your suggestions, include a gentle, humble \
+disclaimer on the plan (e.g. "This is my suggestion — feel free to edit or change \
+it 🤍").
+  - AUTONOMOUS FALLBACK. If you genuinely cannot fully produce something yourself \
+(e.g. it needs an image or live data you can't generate), do NOT hand back a \
+vague placeholder. Instead write a ready-to-paste PROMPT Camille can drop \
+straight into Claude to generate it, and clearly label it by beginning that text \
+with "📋 PROMPT FOR CLAUDE:". Use this only when truly needed — it's your \
+judgment call.
+
 HER NICHE (keep every idea relevant to this):
   - Digital marketing and content creation
   - Her own projects and behind-the-scenes
@@ -188,11 +215,20 @@ For EACH of the three pieces give:
   - a "why this, why now" note (why it's worth posting this week),
   - a short reference/inspo note (a style or format that's working — described in \
 general terms, NOT scraped from a specific creator or platform),
-  - one recommended tool,
-  - drafted copy she can use as-is:
-      * Carousel: a strong, punchy hook plus slide-by-slide text.
-      * Video / Reel: a punchy hook line plus a brief shot/beat outline.
-      * Post / graphic: a caption.
+  - the tool from her OWN kit she'd use to MAKE this piece (e.g. Canva for a \
+carousel, CapCut for a reel) — this fills the table's Tools column,
+  - at least one SOURCE for the idea/trend: where you found it, with the ACTUAL link,
+  - drafted copy she can use as-is, in her gentle, authentic voice (never hypey):
+      * Carousel: the COMPLETE, ready-to-paste slide-by-slide text. Slide 1 is \
+the cover/hook that stops the scroll; each middle slide makes exactly ONE clear \
+point (for a "5 tools" carousel, that's roughly one tool per slide); the final \
+slide is the CTA. Write each slide as clean text she can drop straight into \
+Canva, and do NOT prefix slides with "Slide 1" etc. (the app adds those labels). \
+PLUS a full post caption: a strong first line, then the value, then a call to \
+action — optimized for the platform and GEO/SEO-aware (work the key phrase in \
+naturally; do NOT hashtag-stuff, a few natural tags at most).
+      * Video / Reel: a punchy hook line, a brief shot/beat outline, and a caption.
+      * Post / graphic: a caption (plus a hook line if it helps).
   - multi-platform fit notes: how to adapt the SAME idea across LinkedIn, \
 Substack, TikTok, Instagram, and YouTube (repurposing HER own content — never \
 scraping or reposting others'),
@@ -201,9 +237,18 @@ found in both search engines and AI answer engines (GEO).
 
 Keep hooks punchy and human.
 
-TOOLS — you may ONLY ever recommend from this exact list, and must NEVER invent \
-or suggest any other tool:
+TOOL RECOMMENDATIONS (research everything; never invent a tool):
+  - ROUNDUP / "best tools" content (e.g. "5 AI tools for small-business \
+marketing"): research and name the REAL, currently-trending WIDER-MARKET tools — \
+NOT just Camille's own kit. Name each actual product, with a concrete one-line \
+reason it helps small-business marketing, and include a few BONUS tools in the \
+caption. Keep it relatable, trustworthy, and current. A "5 tools" carousel must \
+name 5 real tools, not 3 and not vague ones.
+  - CAMILLE'S OWN-PROCESS content (e.g. "how I built my desktop buddy", \
+behind-the-scenes): authentically feature the tools she ACTUALLY uses:
 {tool_lines}
+  - The per-piece "tool" field (the table's Tools column) is the tool from \
+Camille's OWN kit above that she'd open to MAKE that piece — always from her kit.
 
 VIDEO STRATEGY (decide it fresh each week from what's trending — do NOT use a \
 fixed number):
@@ -245,10 +290,11 @@ that explains it simply (the newsjacking angle).
 styles are working right now — phrased as gentle tips, not scraped from any \
 specific account.
 
-RESEARCH: use the web_search tool to ground the ideas, the AI news, and the hook \
-tips in what's current. Do NOT attempt to pull or scrape viral videos from \
-TikTok, Instagram, YouTube, or LinkedIn — that's out of scope. All copy is plain \
-text for Camille to use manually.
+RESEARCH SCOPE: ground the ideas, the tool roundups, the AI news, the hook tips, \
+and the trending angle in real web research, and cite each with an actual link \
+(see HOW YOU WORK). Do NOT scrape or repost anyone else's actual posts or videos \
+— describe styles and formats in general terms. All copy is plain text for \
+Camille to use manually.
 
 OUTPUT — return ONLY a single JSON object (no prose before or after, no code \
 fences) with exactly this shape:
@@ -256,6 +302,7 @@ fences) with exactly this shape:
 {{
   "week_of": "<short week label>",
   "intro": "<one warm sentence introducing the week>",
+  "disclaimer": "<a gentle, humble note that this is your suggestion she can freely edit or change>",
   "pieces": [
     {{
       "day": "Monday",
@@ -265,14 +312,14 @@ fences) with exactly this shape:
       "idea": "<trend-informed idea>",
       "why": "<why this topic, why now>",
       "inspo": "<short reference / inspo note>",
-      "tool": "<one tool from the allowed list>",
+      "tool": "<the tool from her own kit she'd use to MAKE this piece>",
       "copy": {{
-        "hook": "<punchy hook>",
-        "slides": ["<slide 1 text>", "<slide 2 text>", "..."],
-        "caption": "<caption>"
+        "slides": ["<slide 1: the cover/hook>", "<slide 2: one clear point — name the real tool/thing>", "<...one point per slide...>", "<final slide: the CTA>"],
+        "caption": "<full caption: strong first line + value + call to action, platform- and GEO/SEO-aware, natural (not hashtag-stuffed); for a roundup, add a few bonus tools here>"
       }},
       "platforms": "<how to adapt this idea across LinkedIn / Substack / TikTok / Instagram / YouTube>",
-      "geo_seo": "<keywords to include and GEO/SEO tips to be found in search and AI answers>"
+      "geo_seo": "<keywords to include and GEO/SEO tips to be found in search and AI answers>",
+      "sources": [{{"title": "<where you found this trend/idea>", "url": "<actual link>"}}]
     }},
     {{
       "day": "Wednesday",
@@ -282,14 +329,15 @@ fences) with exactly this shape:
       "idea": "...",
       "why": "...",
       "inspo": "...",
-      "tool": "<one tool from the allowed list>",
+      "tool": "<the tool from her own kit she'd use to MAKE this piece>",
       "copy": {{
         "hook": "<punchy hook line>",
         "outline": ["<beat 1>", "<beat 2>", "..."],
         "caption": "<caption>"
       }},
       "platforms": "...",
-      "geo_seo": "..."
+      "geo_seo": "...",
+      "sources": [{{"title": "<where you found this trend/idea>", "url": "<actual link>"}}]
     }},
     {{
       "day": "Friday",
@@ -299,16 +347,18 @@ fences) with exactly this shape:
       "idea": "...",
       "why": "...",
       "inspo": "...",
-      "tool": "<one tool from the allowed list>",
+      "tool": "<the tool from her own kit she'd use to MAKE this piece>",
       "copy": {{
         "caption": "<caption>"
       }},
       "platforms": "...",
-      "geo_seo": "..."
+      "geo_seo": "...",
+      "sources": [{{"title": "<where you found this trend/idea>", "url": "<actual link>"}}]
     }}
   ],
   "video_strategy": {{
     "summary": "<this week's video plan and WHY: how many videos, which trend, which platforms, expected traction>",
+    "sources": [{{"title": "<where you found the video trend>", "url": "<actual link>"}}],
     "videos": [
       {{
         "title": "<short video title>",
@@ -332,7 +382,8 @@ fences) with exactly this shape:
     "headline": "<the recent launch>",
     "in_plain_terms": "<what it is, in everyday language>",
     "why_it_matters": "<why marketers / small businesses should care>",
-    "carousel_idea": "<a simple carousel idea explaining it>"
+    "carousel_idea": "<a simple carousel idea explaining it>",
+    "source": {{"title": "<where you found this news>", "url": "<actual link>"}}
   }},
   "hook_tips": ["<tip>", "<tip>", "<tip>"],
   "closing_note": "<a gentle, encouraging sign-off>"
@@ -380,6 +431,10 @@ def mock_plan() -> dict:
             "Here's a gentle plan for your week, Camille — three pieces, all "
             "ready to go. No rush. 🤍"
         ),
+        "disclaimer": (
+            "This is my suggestion based on what's trending this week — feel free "
+            "to edit or change anything. You know your audience best. 🤍"
+        ),
         "pieces": [
             {
                 "day": "Monday",
@@ -398,20 +453,36 @@ def mock_plan() -> dict:
                 ),
                 "tool": "Canva",
                 "copy": {
-                    "hook": "You don't need a bigger budget. You need these 5 tools. 🤍",
                     "slides": [
-                        "Slide 1 — Hook: You don't need a bigger budget. You need these 5 tools.",
-                        "Slide 2 — Why it matters: AI can quietly do the heavy lifting so you "
-                        "get your evenings back.",
-                        "Slide 3 — Tool 1: A captions assistant that sounds like you, not a robot.",
-                        "Slide 4 — Tool 2: A design tool for on-brand graphics in minutes.",
-                        "Slide 5 — Tool 3: A quick video editor for clean, scroll-stopping reels.",
-                        "Slide 6 — Save this & tell me: which one are you trying first?",
+                        "You don't need a bigger budget. You need these 5 tools. 🤍",
+                        "Claude — paste your messy voice notes and get captions that "
+                        "actually sound like you. No more blank-box dread.",
+                        "Canva — set up one brand kit, and every graphic comes out "
+                        "on-brand in minutes instead of hours.",
+                        "CapCut — cut your reels fast with auto-captions, so a post is "
+                        "done before your coffee's even cold.",
+                        "Higgsfield — turn your raw clips into one clean, cinematic edit "
+                        "without learning complicated software.",
+                        "Nano Banana — generate on-brand images and thumbnails for the "
+                        "days you don't have a photo ready.",
+                        "Save this for your next content day 🤍 Then tell me which one "
+                        "you're trying first.",
                     ],
                     "caption": (
-                        "Marketing your small business shouldn't cost you your weekends. "
-                        "Here are 5 gentle little tools doing the heavy lifting for me lately. "
-                        "Save this one for later 🤍 Which are you trying first?"
+                        "The AI tools quietly doing my small-business marketing for me "
+                        "(so I can have my weekends back) 👇\n\n"
+                        "You don't need a bigger budget or a marketing degree — you just "
+                        "need a few tools that do the heavy lifting. These are the 5 AI "
+                        "tools I actually use every week to plan, write, design, and edit "
+                        "my content:\n\n"
+                        "→ Claude for captions that sound like me\n"
+                        "→ Canva for on-brand graphics\n"
+                        "→ CapCut for fast reels\n"
+                        "→ Higgsfield for a cinematic edit\n"
+                        "→ Nano Banana for quick on-brand images\n\n"
+                        "Save this for your next content day, and tell me which one "
+                        "you're trying first 🤍\n\n"
+                        "#smallbusinessmarketing #aitools #contentcreation #marketingtips"
                     ),
                 },
                 "platforms": (
@@ -422,6 +493,12 @@ def mock_plan() -> dict:
                     "Work the phrase 'AI tools for small business marketing' into slide 1 and "
                     "the caption; add alt text per slide so search and AI answer engines can read it."
                 ),
+                "sources": [
+                    {
+                        "title": "(sample) r/smallbusiness — 'AI tools you actually use' thread",
+                        "url": "https://example.com/sample-source",
+                    },
+                ],
             },
             {
                 "day": "Wednesday",
@@ -461,6 +538,12 @@ def mock_plan() -> dict:
                     "Say 'AI automation for small business' out loud in the hook (captions are "
                     "indexed) and use it in the on-screen title and upload name."
                 ),
+                "sources": [
+                    {
+                        "title": "(sample) Trending LinkedIn post — 'build with me' AI content",
+                        "url": "https://example.com/sample-source",
+                    },
+                ],
             },
             {
                 "day": "Friday",
@@ -492,6 +575,12 @@ def mock_plan() -> dict:
                     "Add descriptive alt text and a searchable caption ('small business "
                     "motivation') so the graphic is findable in search and AI answers."
                 ),
+                "sources": [
+                    {
+                        "title": "(sample) Later.com blog — text-post trends this month",
+                        "url": "https://example.com/sample-source",
+                    },
+                ],
             },
         ],
         "video_strategy": {
@@ -504,6 +593,12 @@ def mock_plan() -> dict:
                 "and search/AI-answer discovery). The short-form rides the trend for a "
                 "traffic spike; the long-form keeps working for months."
             ),
+            "sources": [
+                {
+                    "title": "(sample) TikTok Creative Center — trending formats this week",
+                    "url": "https://example.com/sample-source",
+                },
+            ],
             "videos": [
                 {
                     "title": "5 AI tools doing my marketing for me",
@@ -700,6 +795,10 @@ def mock_plan() -> dict:
                 "'What this new AI update means for your small business (in plain English)' "
                 "— one calm slide per benefit, no jargon."
             ),
+            "source": {
+                "title": "(sample) TechCrunch — this week's AI launch",
+                "url": "https://example.com/sample-source",
+            },
         },
         "hook_tips": [
             "Lead with the outcome your reader wants, not the topic ('Get your evenings back', not 'About automation').",

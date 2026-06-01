@@ -139,6 +139,49 @@ def _rich_text(content: str) -> list[dict]:
     return [{"type": "text", "text": {"content": content[:MAX_TEXT_LENGTH]}}]
 
 
+def _bold_line(content: str) -> dict:
+    """A short, bold paragraph — used as a copy-paste-friendly label above content."""
+    run = {"type": "text", "text": {"content": content[:MAX_TEXT_LENGTH]}, "annotations": {"bold": True}}
+    return {"object": "block", "type": "paragraph", "paragraph": {"rich_text": [run]}}
+
+
+def _callout(content: str, emoji: str = "💡") -> dict:
+    """A callout block — a gently boxed note, used for the 'this is a suggestion' line."""
+    return {
+        "object": "block",
+        "type": "callout",
+        "callout": {"rich_text": _rich_text(content), "icon": {"type": "emoji", "emoji": emoji}},
+    }
+
+
+def _link_run(title: str, url: str) -> dict:
+    """A rich-text run that links to a URL, falling back safely if the URL is unusable.
+
+    Notion rejects an empty or non-http link, which would fail the whole page
+    write, so a malformed URL is shown as plain text instead of a broken link.
+    """
+    content = (title or url or "").strip()
+    if url and url.startswith(("http://", "https://")):
+        return {"type": "text", "text": {"content": content[:MAX_TEXT_LENGTH], "link": {"url": url}}}
+    if url:
+        content = f"{content} ({url})"
+    return {"type": "text", "text": {"content": content[:MAX_TEXT_LENGTH]}}
+
+
+def _source_blocks(sources) -> list[dict]:
+    """Render a 'Sources' label and one linked bullet per cited source, or nothing."""
+    valid = [s for s in (sources or []) if isinstance(s, dict) and (s.get("title") or s.get("url"))]
+    if not valid:
+        return []
+    blocks: list[dict] = [_bold_line("🔗 Sources:")]
+    for source in valid:
+        run = _link_run(source.get("title", ""), source.get("url", ""))
+        blocks.append(
+            {"object": "block", "type": "bulleted_list_item", "bulleted_list_item": {"rich_text": [run]}}
+        )
+    return blocks
+
+
 def _block(block_type: str, content: str) -> dict:
     """Build a single-line block (heading or paragraph) holding one string."""
     return {
@@ -224,6 +267,9 @@ def _build_blocks(plan: dict) -> list[dict]:
     ]
     if plan.get("intro"):
         blocks.append(_block("paragraph", plan["intro"]))
+    # Her humble note that this is a suggestion Camille can freely edit.
+    if plan.get("disclaimer"):
+        blocks.append(_callout(plan["disclaimer"], "🤍"))
 
     # The week at a glance is a real bordered table; the ready-to-use copy and
     # notes (too long for cells) follow underneath, one block per piece.
@@ -241,6 +287,9 @@ def _build_blocks(plan: dict) -> list[dict]:
         blocks += _labelled("In plain terms", news.get("in_plain_terms"))
         blocks += _labelled("Why it matters", news.get("why_it_matters"))
         blocks += _labelled("Carousel idea", news.get("carousel_idea"))
+        news_source = news.get("source")
+        if news_source:
+            blocks += _source_blocks([news_source])
 
     tips = plan.get("hook_tips")
     if tips:
@@ -275,16 +324,49 @@ def _piece_detail_blocks(piece: dict) -> list[dict]:
     blocks += _labelled("Idea", piece.get("idea"))
 
     copy = piece.get("copy") or {}
-    if copy:
+    slides = copy.get("slides") or []
+    outline = copy.get("outline") or []
+    if slides:
+        # Carousel: slide 1 is the cover/hook, so don't repeat a separate hook.
+        blocks += _carousel_slide_blocks(slides)
+    elif outline:
         blocks += _labelled("Hook", copy.get("hook"))
-        for slide in copy.get("slides", []):
-            blocks.append(_bullet(slide))
-        for beat in copy.get("outline", []):
-            blocks.append(_bullet(beat))
-        blocks += _labelled("Caption", copy.get("caption"))
+        blocks.append(_bold_line("Shot / beat outline:"))
+        blocks += [_bullet(beat) for beat in outline]
+    else:
+        blocks += _labelled("Hook", copy.get("hook"))
+
+    # The caption goes in its own clean block (no "Caption:" prefix) so it can be
+    # pasted straight into the post box, line breaks and all.
+    caption = copy.get("caption")
+    if caption:
+        blocks.append(_bold_line("📝 Caption — ready to paste:"))
+        blocks.append(_block("paragraph", caption))
 
     blocks += _labelled("Multi-platform fit", piece.get("platforms"))
     blocks += _labelled("GEO/SEO", piece.get("geo_seo"))
+    blocks += _source_blocks(piece.get("sources"))
+    return blocks
+
+
+def _carousel_slide_blocks(slides: list[str]) -> list[dict]:
+    """Render carousel slides as labeled, copy-paste-ready blocks.
+
+    Each slide is a bold "Slide N" label — the first is the cover/hook, the last
+    is the CTA — followed by that slide's exact text on its own block, so Camille
+    can copy a single slide straight into Canva with nothing to trim.
+    """
+    blocks: list[dict] = [_bold_line("🎠 Carousel slides — ready to paste:")]
+    count = len(slides)
+    for index, text in enumerate(slides):
+        if index == 0:
+            label = "Slide 1 — Hook (cover)"
+        elif index == count - 1:
+            label = f"Slide {count} — CTA"
+        else:
+            label = f"Slide {index + 1}"
+        blocks.append(_bold_line(label))
+        blocks.append(_block("paragraph", text))
     return blocks
 
 
@@ -294,6 +376,7 @@ def _video_strategy_blocks(strategy: dict) -> list[dict]:
     """Build the video-scripts section: the week's strategy, then a full script each."""
     blocks: list[dict] = [_block("heading_1", "🎬 Video scripts")]
     blocks += _labelled("This week's video strategy", strategy.get("summary"))
+    blocks += _source_blocks(strategy.get("sources"))
     for video in strategy.get("videos", []):
         blocks += _video_blocks(video)
     return blocks
