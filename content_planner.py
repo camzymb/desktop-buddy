@@ -156,9 +156,19 @@ def load_plan_payload() -> dict:
 # === PROMPTS ===
 
 def _week_label(today: datetime) -> str:
-    """A gentle label for the week the plan covers, e.g. 'Week of Mon, Jun 1'."""
+    """A dated label for the week the plan covers, e.g. 'Week of Jun 2–8, 2026'.
+
+    Spans Monday to Sunday. Used as the heading, the panel label, and the title
+    of each week's archived sub-page in Notion, so it carries the full range and
+    year (and stays readable across month or year boundaries).
+    """
     monday = today - timedelta(days=today.weekday())
-    return "Week of " + monday.strftime("%a, %b %-d")
+    sunday = monday + timedelta(days=6)
+    if monday.year != sunday.year:
+        return f"Week of {monday.strftime('%b %-d, %Y')} – {sunday.strftime('%b %-d, %Y')}"
+    if monday.month == sunday.month:
+        return f"Week of {monday.strftime('%b %-d')}–{sunday.day}, {sunday.year}"
+    return f"Week of {monday.strftime('%b %-d')} – {sunday.strftime('%b %-d')}, {sunday.year}"
 
 
 def _system_prompt() -> str:

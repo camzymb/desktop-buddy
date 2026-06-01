@@ -14,9 +14,11 @@ committed):
     NOTION_PAGE_ID   — the page to write the plan to
 
 The page must be shared with your integration (Notion → page → ••• → Connections).
-Each run REPLACES the page's contents with the current week's plan, so the page
-always shows the latest. Any missing setup or API problem is returned as a
-friendly message — this module never raises into the caller.
+Each run ARCHIVES the week as its own dated sub-page (e.g. "Week of Jun 2–8,
+2026") under that page — it never overwrites or deletes earlier weeks, so the
+Content Plans page becomes a growing, dated history. Any missing setup or API
+problem is returned as a friendly message — this module never raises into the
+caller.
 """
 
 # === IMPORTS ===
@@ -72,12 +74,13 @@ def page_url() -> str:
 
 
 def publish_plan(plan: dict) -> str:
-    """Write the full plan to the Notion page; return "" on success or a message.
+    """Archive this week's plan as a new dated sub-page; return "" or a message.
 
-    Loads the token and page id from .env, replaces the page's existing content
-    with freshly built blocks for this week's plan, and reports any expected
-    problem (missing setup, access/sharing issue, network) as a friendly string
-    instead of raising, so the buddy never crashes over a publishing hiccup.
+    Loads the token and page id from .env, then ADDS the week as its own dated
+    sub-page under the Content Plans page (never overwriting or deleting earlier
+    weeks). Reports any expected problem (missing setup, access/sharing issue,
+    network) as a friendly string instead of raising, so the buddy never crashes
+    over a publishing hiccup.
     """
     load_env_file()
     token = os.environ.get(NOTION_TOKEN_VAR, "").strip()
@@ -96,9 +99,10 @@ def publish_plan(plan: dict) -> str:
         return MISSING_LIBRARY_MESSAGE
 
     client = Client(auth=token)
+    title = plan.get("week_of") or "Weekly Content Plan"
     blocks = _build_blocks(plan)
     try:
-        _replace_page_content(client, page_id, blocks)
+        _archive_week(client, page_id, title, blocks)
     except APIResponseError:
         # 401/403/404 almost always mean a bad token or an unshared page.
         return ACCESS_ERROR_MESSAGE
@@ -107,29 +111,25 @@ def publish_plan(plan: dict) -> str:
     return ""
 
 
-# === NOTION WRITE ===
+# === NOTION WRITE (archive, never overwrite) ===
 
-def _replace_page_content(client, page_id: str, blocks: list[dict]) -> None:
-    """Clear the page's existing blocks, then append the new plan in chunks."""
-    _clear_page(client, page_id)
-    for start in range(0, len(blocks), APPEND_CHUNK_SIZE):
-        client.blocks.children.append(
-            block_id=page_id, children=blocks[start : start + APPEND_CHUNK_SIZE]
-        )
+def _archive_week(client, parent_page_id: str, title: str, blocks: list[dict]) -> None:
+    """Create a NEW dated sub-page under the Content Plans page for this week.
 
-
-def _clear_page(client, page_id: str) -> None:
-    """Delete (archive) every existing child block so each run writes fresh.
-
-    Children are listed page by page and deleted, so a previously written plan
-    is replaced rather than stacked beneath the new one.
+    Past weeks are never touched — each run only adds. A Notion page-create
+    accepts at most APPEND_CHUNK_SIZE child blocks, so the first chunk seeds the
+    new page and any remainder is appended to it in further chunks.
     """
-    while True:
-        response = client.blocks.children.list(block_id=page_id, page_size=APPEND_CHUNK_SIZE)
-        for child in response["results"]:
-            client.blocks.delete(block_id=child["id"])
-        if not response.get("has_more"):
-            break
+    new_page = client.pages.create(
+        parent={"page_id": parent_page_id},
+        properties={"title": {"title": _rich_text(title)}},
+        children=blocks[:APPEND_CHUNK_SIZE],
+    )
+    new_page_id = new_page["id"]
+    for start in range(APPEND_CHUNK_SIZE, len(blocks), APPEND_CHUNK_SIZE):
+        client.blocks.children.append(
+            block_id=new_page_id, children=blocks[start : start + APPEND_CHUNK_SIZE]
+        )
 
 
 # === BLOCK BUILDERS ===
