@@ -186,6 +186,10 @@ PLAN_NOTION_OPEN_FAILED_MESSAGE = "I couldn't open Notion just now — sorry! �
 # Fire the plan once, a beat after she's settled (mirrors the reminder preview).
 PLAN_WEEK_DELAY_MS = 3500
 
+# On a normal launch she quietly shows the LAST SAVED plan (read locally — no API
+# call), a moment after she's settled so it doesn't pop in before she appears.
+PLAN_PANEL_SHOW_DELAY_MS = 1800
+
 # --- Single instance ---
 
 # A per-user lock so only one buddy ever runs at a time (e.g. if autostart and
@@ -466,10 +470,13 @@ class BuddyOverlay(QWidget):
         else:
             self._startup_timer.start(STARTUP_GREETING_DELAY_MS)
 
-        # If asked at launch, research and open this week's content plan once
-        # she's settled (independent of the greeting above).
+        # The content plan, once she's settled (independent of the greeting):
+        # with --plan-week she researches a fresh plan; on a normal launch she
+        # just shows the last saved plan from disk — no API call, no cost.
         if self._plan_week_on_start:
             QTimer.singleShot(PLAN_WEEK_DELAY_MS, self._start_weekly_plan)
+        else:
+            QTimer.singleShot(PLAN_PANEL_SHOW_DELAY_MS, self._show_saved_plan_panel)
 
         # Start watching the calendar for upcoming events: fetch today's now,
         # then keep it fresh and check the clock on their own gentle timers.
@@ -786,30 +793,47 @@ class BuddyOverlay(QWidget):
             status = publish_plan(plan)      # write the full plan to Notion
         self.plan_ready.emit(status)
 
+    def _show_saved_plan_panel(self) -> None:
+        """On a normal launch, quietly show the last saved plan — no API, no talk.
+
+        Reads weekly_plan.json from disk and pops the panel in its remembered
+        spot. If nothing's been planned yet, it shows nothing (no empty card).
+        """
+        self._populate_plan_panel(load_plan_payload())
+
+    def _populate_plan_panel(self, plan: dict) -> bool:
+        """Fill the panel from a plan dict and show it; return True if it had a plan.
+
+        Shows nothing when the plan has no pieces (none saved yet, or a failed
+        run), so an empty card never pops onto the desktop. Reused by the launch
+        path and the --plan-week generation path.
+        """
+        pieces = plan.get("pieces") or []
+        if not pieces:
+            return False
+        rows = [
+            (piece.get("day", ""), piece.get("format", ""),
+             piece.get("topic") or piece.get("idea", ""))
+            for piece in pieces
+        ]
+        self._plan_panel.set_overview(plan.get("week_of", ""), rows)
+        if self._plan_panel.is_open:
+            self._plan_panel.raise_()
+            self._update_input_mask()
+        else:
+            self._plan_panel.show_panel()
+        return True
+
     def _on_plan_ready(self, status: str) -> None:
-        """Show the compact overview panel and give a gentle spoken update.
+        """Show the freshly generated overview panel and give a gentle spoken update.
 
         `status` is empty on full success, or a friendly message describing a
         problem. When the plan itself was built (it has pieces) the panel is
         shown regardless, so a Notion-only hiccup still leaves the overview up
         with the issue explained out loud.
         """
-        plan = load_plan_payload()
-        pieces = plan.get("pieces") or []
-        if pieces:
-            rows = [
-                (piece.get("day", ""), piece.get("format", ""),
-                 piece.get("topic") or piece.get("idea", ""))
-                for piece in pieces
-            ]
-            self._plan_panel.set_overview(plan.get("week_of", ""), rows)
-            if self._plan_panel.is_open:
-                self._plan_panel.raise_()
-                self._update_input_mask()
-            else:
-                self._plan_panel.show_panel()
-
-        if not pieces:
+        had_plan = self._populate_plan_panel(load_plan_payload())
+        if not had_plan:
             message = status or PLAN_FAILED_MESSAGE
         elif status:
             message = status
