@@ -29,6 +29,7 @@ from PyQt6.QtGui import (
     QGuiApplication,
     QIcon,
     QKeyEvent,
+    QMouseEvent,
     QPixmap,
     QRegion,
     QResizeEvent,
@@ -65,6 +66,10 @@ BUDDY_HEIGHT_PX = 200
 
 # Safety padding from screen edges so the buddy never clips a corner.
 EDGE_MARGIN_PX = 20
+
+# A press on the buddy must travel at least this far before it counts as picking
+# her up to drag (rather than a bare click, which leaves her walking undisturbed).
+BUDDY_DRAG_THRESHOLD_PX = 4
 
 # Movement-loop cadence and step size. 33ms ≈ 30 FPS; 2.5 px/tick yields a
 # gentle stroll across both 1080p and 4K displays.
@@ -304,6 +309,9 @@ class BuddyOverlay(QWidget):
         # Saves disk reads on every leg-swap during a walk.
         self._pixmaps = self._load_pixmaps()
         self._sprite_label = QLabel(self)
+        # Let mouse events fall through the sprite to the overlay, which handles
+        # picking her up and dragging her (the sprite itself never needs clicks).
+        self._sprite_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self._speech_bubble = SpeechBubble(self)
         # Proof-of-concept daily-summary panel. It refreshes the overlay mask
         # on every animation frame via the callback so it stays visible while
@@ -318,6 +326,9 @@ class BuddyOverlay(QWidget):
         # Walk state. Position is initialized later in showEvent() once the
         # window has its real size from the compositor.
         self._feet_x: float = 0.0
+        # Her feet's Y. Normally the ground line (bottom), but dragging can set it
+        # anywhere, and she then walks left/right along that height.
+        self._feet_y: float = 0.0
         self._ground_y: int = 0
         self._state: State = State.IDLE
         self._direction: Direction = Direction.LEFT
@@ -325,6 +336,17 @@ class BuddyOverlay(QWidget):
         self._frame_index: int = 0
         self._distance_since_last_step: float = 0.0
         self._has_started: bool = False
+
+        # Drag-to-reposition state. A press on her arms a possible drag; once the
+        # cursor moves past the threshold she's "picked up" (walking pauses) and
+        # follows the cursor until release. _drag_grab_dx/dy keep her steady under
+        # the cursor (offset from the click point to her feet coordinate).
+        self._drag_armed: bool = False
+        self._dragging_buddy: bool = False
+        self._drag_press_x: int = 0
+        self._drag_press_y: int = 0
+        self._drag_grab_dx: float = 0.0
+        self._drag_grab_dy: float = 0.0
 
         # Single ~30 FPS timer drives both position updates and stride-based
         # leg animation. When she's resting, this timer is stopped.
@@ -465,6 +487,7 @@ class BuddyOverlay(QWidget):
         min_spawn_x = sprite_half_width + EDGE_MARGIN_PX
         max_spawn_x = self.width() - sprite_half_width - EDGE_MARGIN_PX
         self._feet_x = random.uniform(min_spawn_x, max_spawn_x)
+        self._feet_y = self._ground_y  # start on the floor
 
         self._show_sprite(IDLE_SPRITE)
         self._begin_walking()
@@ -507,6 +530,7 @@ class BuddyOverlay(QWidget):
             return
 
         self._ground_y = self.height() - EDGE_MARGIN_PX
+        self._feet_y = self._ground_y  # a resize re-anchors her to the floor
 
         sprite_half_width = self._sprite_label.width() / 2
         min_x = sprite_half_width + EDGE_MARGIN_PX
@@ -533,7 +557,7 @@ class BuddyOverlay(QWidget):
         sprite_width = self._sprite_label.width()
         sprite_height = self._sprite_label.height()
         left_x = int(self._feet_x - sprite_width / 2)
-        top_y = int(self._ground_y - sprite_height)
+        top_y = int(self._feet_y - sprite_height)
         self._sprite_label.move(left_x, top_y)
         self._update_input_mask()
 
@@ -554,6 +578,75 @@ class BuddyOverlay(QWidget):
         if self._plan_panel.isVisible():
             region = region.united(QRegion(self._plan_panel.geometry()))
         self.setMask(region)
+
+    # --- dragging the buddy ---
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        """Arm a possible pick-up when she's pressed (the cards handle their own clicks).
+
+        Only a left-press landing on her sprite, while she's idle or walking,
+        arms a drag — not while she's mid-speech, so a bubble is never cut off.
+        Nothing moves yet: a bare click (no drag) leaves her walking undisturbed.
+        """
+        point = event.position().toPoint()
+        on_buddy = self._sprite_label.geometry().contains(point)
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and on_buddy
+            and self._state in (State.IDLE, State.WALKING)
+        ):
+            self._drag_armed = True
+            self._dragging_buddy = False
+            self._drag_press_x = point.x()
+            self._drag_press_y = point.y()
+            self._drag_grab_dx = self._feet_x - point.x()
+            self._drag_grab_dy = self._feet_y - point.y()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        """Once the press travels past the threshold, pick her up and follow the cursor."""
+        if not self._drag_armed:
+            super().mouseMoveEvent(event)
+            return
+        point = event.position().toPoint()
+        if not self._dragging_buddy:
+            moved = abs(point.x() - self._drag_press_x) + abs(point.y() - self._drag_press_y)
+            if moved < BUDDY_DRAG_THRESHOLD_PX:
+                return
+            # Crossed the threshold: pick her up. Pause her walk/rest cycle and
+            # show the idle pose so she reads as "held" rather than mid-stride.
+            self._dragging_buddy = True
+            self._move_timer.stop()
+            self._idle_timer.stop()
+            self._state = State.IDLE
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            self._show_sprite(IDLE_SPRITE)
+        self._feet_x = self._clamp_feet_x(point.x() + self._drag_grab_dx)
+        self._feet_y = self._clamp_feet_y(point.y() + self._drag_grab_dy)
+        self._reposition_sprite()
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        """Drop her where released and resume her normal wander from that spot."""
+        if self._drag_armed:
+            was_dragging = self._dragging_buddy
+            self._drag_armed = False
+            self._dragging_buddy = False
+            if was_dragging:
+                self.unsetCursor()
+                self._begin_resting()  # settle at the new spot, then wander again
+            return
+        super().mouseReleaseEvent(event)
+
+    def _clamp_feet_x(self, feet_x: float) -> float:
+        """Keep her horizontally on-screen (feet point is her horizontal centre)."""
+        half = self._sprite_label.width() / 2
+        return max(half, min(feet_x, self.width() - half))
+
+    def _clamp_feet_y(self, feet_y: float) -> float:
+        """Keep her vertically on-screen (feet point is the bottom of the sprite)."""
+        height = self._sprite_label.height()
+        return max(height, min(feet_y, self.height()))
 
     # --- state transitions ---
 
@@ -599,7 +692,7 @@ class BuddyOverlay(QWidget):
         Re-triggers while she's already talking (a stray timer tick or an
         eager key press) are ignored so a bubble in progress isn't reset.
         """
-        if self._state == State.TALKING:
+        if self._state == State.TALKING or self._dragging_buddy:
             return
 
         self._move_timer.stop()
