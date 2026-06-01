@@ -27,10 +27,20 @@ PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 VENV_PYTHON="${PROJECT_DIR}/.venv/bin/python"
 MAIN_SCRIPT="${PROJECT_DIR}/main.py"
 LAUNCHER="${SCRIPT_DIR}/launch_buddy.sh"
-ICON_PATH="${PROJECT_DIR}/sprites/idle_front.png"
+ICON_PATH="${PROJECT_DIR}/assets/app-icon.png"
+
+# Must match the app's Wayland app-id / X11 WM class so the dock ties the running
+# window to this .desktop (and shows its icon). main.py sets that id via
+# app.setDesktopFileName("desktop-buddy").
+WM_CLASS="desktop-buddy"
 
 AUTOSTART_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/autostart"
 DESKTOP_FILE="${AUTOSTART_DIR}/desktop-buddy.desktop"
+
+# A second copy in the applications dir is what the dock/launcher actually scans
+# to match a window to its icon — the autostart dir alone isn't enough.
+APPLICATIONS_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/applications"
+APP_DESKTOP_FILE="${APPLICATIONS_DIR}/desktop-buddy.desktop"
 
 # --- Status mode: show the installed entry and verify its paths still exist.
 if [[ "${1:-}" == "--status" ]]; then
@@ -43,8 +53,13 @@ if [[ "${1:-}" == "--status" ]]; then
     echo "----------------------------------------------------------------"
     cat "${DESKTOP_FILE}"
     echo "----------------------------------------------------------------"
+    if [[ -f "${APP_DESKTOP_FILE}" ]]; then
+        echo "Launcher entry (for the dock icon): ${APP_DESKTOP_FILE}  OK"
+    else
+        echo "Launcher entry (for the dock icon): ${APP_DESKTOP_FILE}  MISSING (re-run to install)"
+    fi
     echo "Path checks:"
-    for target in "${LAUNCHER}" "${VENV_PYTHON}" "${MAIN_SCRIPT}"; do
+    for target in "${LAUNCHER}" "${VENV_PYTHON}" "${MAIN_SCRIPT}" "${ICON_PATH}"; do
         if [[ -e "${target}" ]]; then
             echo "  OK      ${target}"
         else
@@ -54,14 +69,19 @@ if [[ "${1:-}" == "--status" ]]; then
     exit 0
 fi
 
-# --- Remove mode: delete the autostart entry and exit.
+# --- Remove mode: delete both entries and exit.
 if [[ "${1:-}" == "--remove" ]]; then
-    if [[ -f "${DESKTOP_FILE}" ]]; then
-        rm -f "${DESKTOP_FILE}"
-        echo "Removed autostart entry: ${DESKTOP_FILE}"
+    found=0
+    for target in "${DESKTOP_FILE}" "${APP_DESKTOP_FILE}"; do
+        if [[ -f "${target}" ]]; then
+            rm -f "${target}"; found=1
+            echo "Removed: ${target}"
+        fi
+    done
+    if [[ "${found}" -eq 1 ]]; then
         echo "Desktop Buddy will no longer launch on login."
     else
-        echo "No autostart entry found at ${DESKTOP_FILE} (nothing to remove)."
+        echo "No entries found (nothing to remove)."
     fi
     exit 0
 fi
@@ -78,11 +98,12 @@ if [[ ! -x "${LAUNCHER}" ]]; then
     exit 1
 fi
 
-mkdir -p "${AUTOSTART_DIR}"
+mkdir -p "${AUTOSTART_DIR}" "${APPLICATIONS_DIR}"
 
 # Write the autostart entry. Exec/Path use absolute paths because autostart does
 # not expand ~ or $HOME in these fields. Exec runs the launch wrapper, which
-# waits for the Wayland session to settle before starting main.py.
+# waits for the Wayland session to settle before starting main.py. StartupWMClass
+# matches the running window's app-id so the dock shows this entry's icon.
 cat > "${DESKTOP_FILE}" <<EOF
 [Desktop Entry]
 Type=Application
@@ -91,13 +112,25 @@ Comment=Chibi desktop companion — morning greeting and daily post-it
 Exec=${LAUNCHER}
 Path=${PROJECT_DIR}
 Icon=${ICON_PATH}
+StartupWMClass=${WM_CLASS}
 Terminal=false
 X-GNOME-Autostart-enabled=true
 Categories=Utility;
 EOF
 
-echo "Installed autostart entry: ${DESKTOP_FILE}"
+# Install the same entry in the applications dir so the dock/launcher can find it
+# and match the running window (by StartupWMClass / app-id) to this icon. The
+# autostart-only key is dropped here since it's meaningless for a launcher entry.
+grep -v '^X-GNOME-Autostart-enabled=' "${DESKTOP_FILE}" > "${APP_DESKTOP_FILE}"
+
+# Refresh the desktop database so the new launcher entry is picked up (best-effort).
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database "${APPLICATIONS_DIR}" >/dev/null 2>&1 || true
+fi
+
+echo "Installed autostart entry:  ${DESKTOP_FILE}"
+echo "Installed launcher entry:   ${APP_DESKTOP_FILE}  (so the dock shows the icon)"
 echo "Desktop Buddy will now launch automatically when you log in."
 echo
 echo "To disable later, run:  ${SCRIPT_DIR}/setup_autostart.sh --remove"
-echo "(or delete ${DESKTOP_FILE}, or toggle it off in COSMIC Settings > Startup Applications)"
+echo "(or delete the files above, or toggle it off in COSMIC Settings > Startup Applications)"

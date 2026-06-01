@@ -27,6 +27,7 @@ from pathlib import Path
 from PyQt6.QtCore import QLockFile, QStandardPaths, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QGuiApplication,
+    QIcon,
     QKeyEvent,
     QPixmap,
     QRegion,
@@ -51,6 +52,12 @@ from speech_bubble import SpeechBubble
 PROJECT_DIR = Path(__file__).resolve().parent
 SPRITES_DIR = PROJECT_DIR / "sprites"
 SOUNDS_DIR = PROJECT_DIR / "sounds"
+
+# App icon shown in the taskbar/dock (the watercolor chibi-girl rounded square).
+APP_ICON_PATH = PROJECT_DIR / "assets" / "app-icon.png"
+# Matches the autostart entry's filename (desktop-buddy.desktop) so Wayland can
+# associate the window with that .desktop and reuse its icon.
+DESKTOP_FILE_NAME = "desktop-buddy"
 
 # How tall the buddy appears on screen. Width is derived from each sprite's
 # aspect ratio at load time.
@@ -1016,6 +1023,10 @@ def main() -> int:
     stock PyQt6 does not expose — a larger change left for a later chunk.
     """
     app = QApplication(sys.argv)
+    # Taskbar/dock icon. setDesktopFileName lets Wayland tie the window to the
+    # autostart .desktop entry (and its icon); setWindowIcon covers the rest.
+    app.setDesktopFileName(DESKTOP_FILE_NAME)
+    app.setWindowIcon(QIcon(str(APP_ICON_PATH)))
 
     # Single instance: if a buddy is already running, bow out quietly. This is
     # what keeps autostart-on-login from ever spawning a second girl.
