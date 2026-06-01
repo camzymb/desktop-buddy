@@ -11,8 +11,12 @@ around the Instagram grid:
 
 Each piece comes with a short topic, a trend-informed idea, a "why this, why
 now" note, an inspo note, a recommended tool (only ever from her own kit),
-ready-to-use drafted copy, multi-platform fit notes, and GEO/SEO tips. The plan
-also includes a "what's new in AI" newsjacking section and a few hook tips.
+ready-to-use drafted copy, multi-platform fit notes (LinkedIn, Substack, TikTok,
+Instagram, YouTube), and GEO/SEO tips. She also decides a fresh video strategy
+each week from the trends (how many videos, which platforms, why) and writes a
+full, camera-ready cinematic script for each — hook, shot-by-shot breakdown,
+b-roll, on-screen captions, and CTA. The plan also includes a "what's new in AI"
+newsjacking section and a few hook tips.
 
 How it works:
 
@@ -58,9 +62,11 @@ API_KEY_VAR = "ANTHROPIC_API_KEY"
 # A cheap, fast model is plenty for this low-volume, once-a-week research.
 MODEL = "claude-haiku-4-5"
 
-# Headroom for the full plan (table + drafted copy + news + tips). Well under
-# the streaming threshold, so a plain non-streaming call is fine.
-MAX_TOKENS = 8000
+# Headroom for the full plan (table + drafted copy + news + tips) PLUS the full
+# cinematic video scripts, which are long (a long-form shot-by-shot can run
+# pages). Still fast on Haiku and well under the non-streaming timeout, so a
+# plain non-streaming call remains fine.
+MAX_TOKENS = 16000
 
 # The built-in web-search tool, capped so a single run can't rack up searches.
 WEB_SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search", "max_uses": 5}
@@ -176,6 +182,8 @@ THE WEEKLY SHAPE (fixed — built around the Instagram grid, video in the middle
 
 For EACH of the three pieces give:
   - a short topic title (a few words),
+  - the primary platform for that piece (one or two words, e.g. "Instagram" or \
+"Instagram + TikTok"),
   - a trend-informed idea,
   - a "why this, why now" note (why it's worth posting this week),
   - a short reference/inspo note (a style or format that's working — described in \
@@ -185,9 +193,9 @@ general terms, NOT scraped from a specific creator or platform),
       * Carousel: a strong, punchy hook plus slide-by-slide text.
       * Video / Reel: a punchy hook line plus a brief shot/beat outline.
       * Post / graphic: a caption.
-  - multi-platform fit notes: how to adapt the SAME idea across Instagram, \
-TikTok, LinkedIn, and YouTube (repurposing HER own content — never scraping or \
-reposting others'),
+  - multi-platform fit notes: how to adapt the SAME idea across LinkedIn, \
+Substack, TikTok, Instagram, and YouTube (repurposing HER own content — never \
+scraping or reposting others'),
   - GEO/SEO optimization notes: the keywords/phrases to include and how to be \
 found in both search engines and AI answer engines (GEO).
 
@@ -196,6 +204,37 @@ Keep hooks punchy and human.
 TOOLS — you may ONLY ever recommend from this exact list, and must NEVER invent \
 or suggest any other tool:
 {tool_lines}
+
+VIDEO STRATEGY (decide it fresh each week from what's trending — do NOT use a \
+fixed number):
+  - Based on your web research, decide how many videos are worth making this \
+week (typically 1–3) and which platforms they target. Lead with a short \
+strategy note that explains your call: which trend you're riding, which \
+platform(s) each video is for, and the traction you'd expect.
+  - Length follows platform and trend: short-form ~30–60s for TikTok/Instagram \
+(and an optional short cut for LinkedIn); long-form ~10–15 min for YouTube. \
+Pick the mix that fits what's working right now — e.g. one short-form for TikTok \
+that also fits Instagram, plus one long-form for YouTube.
+
+FOR EACH VIDEO you suggest, write a FULL, CAMERA-READY CINEMATIC SCRIPT — \
+detailed enough that Camille could film straight from it with no extra thinking. \
+She films on a Sony a6700 and edits in Higgsfield, so write real, specific camera \
+directions she can shoot to. Do NOT be thin or generic. Each script must include:
+  - Hook: the EXACT words she says in the first 3 seconds (write them out in \
+quotes), plus how it's framed — scroll-stopping.
+  - A shot-by-shot breakdown that covers the WHOLE video, shot by shot. For \
+every shot give BOTH: (a) the camera direction — angle, movement, framing, lens \
+feel — and (b) the EXACT words she says (in quotes) or the precise action she \
+performs. Number enough shots to actually fill the runtime: a short-form video \
+wants roughly 6–10 tight shots; a long-form video must be genuinely long — break \
+it into clear sections/chapters with many shots (12+), not a short summary.
+  - B-roll ideas: specific, shootable cutaways (not "some b-roll" — say exactly \
+what to film).
+  - On-screen captions/text: the ACTUAL words that appear on screen, written out \
+as they'd be typed.
+  - CTA: the EXACT wording of the call to action.
+Match the tone to the format: punchy and energetic for short-form, thoughtful \
+and considered for long-form — always authentic, never hypey.
 
 ALSO INCLUDE:
   - A "what's new in AI / marketing tech this week" section: use web search to \
@@ -220,6 +259,7 @@ fences) with exactly this shape:
   "pieces": [
     {{
       "day": "Monday",
+      "platform": "<primary platform, e.g. Instagram>",
       "format": "Carousel",
       "topic": "<short topic title>",
       "idea": "<trend-informed idea>",
@@ -231,11 +271,12 @@ fences) with exactly this shape:
         "slides": ["<slide 1 text>", "<slide 2 text>", "..."],
         "caption": "<caption>"
       }},
-      "platforms": "<how to adapt this idea across Instagram / TikTok / LinkedIn / YouTube>",
+      "platforms": "<how to adapt this idea across LinkedIn / Substack / TikTok / Instagram / YouTube>",
       "geo_seo": "<keywords to include and GEO/SEO tips to be found in search and AI answers>"
     }},
     {{
       "day": "Wednesday",
+      "platform": "<primary platform, e.g. Instagram + TikTok>",
       "format": "Video / Reel",
       "topic": "...",
       "idea": "...",
@@ -252,6 +293,7 @@ fences) with exactly this shape:
     }},
     {{
       "day": "Friday",
+      "platform": "<primary platform, e.g. Instagram>",
       "format": "Post / graphic",
       "topic": "...",
       "idea": "...",
@@ -265,6 +307,27 @@ fences) with exactly this shape:
       "geo_seo": "..."
     }}
   ],
+  "video_strategy": {{
+    "summary": "<this week's video plan and WHY: how many videos, which trend, which platforms, expected traction>",
+    "videos": [
+      {{
+        "title": "<short video title>",
+        "platform": "<primary platform, noting any cross-post, e.g. 'TikTok (also fits Instagram)'>",
+        "format": "<short-form | long-form>",
+        "length": "<e.g. ~30–60s or ~10–15 min>",
+        "why": "<which trend, which platform, the traction you'd expect>",
+        "script": {{
+          "hook": "<scroll-stopping first 3 seconds>",
+          "shots": [
+            {{"camera": "<camera direction: angle / movement / framing>", "action": "<what she says or does in this shot>"}}
+          ],
+          "b_roll": ["<b-roll / cutaway idea>"],
+          "captions": ["<on-screen text>"],
+          "cta": "<call to action>"
+        }}
+      }}
+    ]
+  }},
   "ai_news": {{
     "headline": "<the recent launch>",
     "in_plain_terms": "<what it is, in everyday language>",
@@ -320,6 +383,7 @@ def mock_plan() -> dict:
         "pieces": [
             {
                 "day": "Monday",
+                "platform": "Instagram",
                 "format": "Carousel",
                 "topic": "5 AI tools for small-business marketing",
                 "idea": "5 AI tools quietly changing how small businesses market in 2026",
@@ -352,7 +416,7 @@ def mock_plan() -> dict:
                 },
                 "platforms": (
                     "Carousel for Instagram; repost as a LinkedIn document; the same 5 points "
-                    "become a short TikTok/Reel list and a quick X thread."
+                    "become a short TikTok/Reel list and a quick Substack note."
                 ),
                 "geo_seo": (
                     "Work the phrase 'AI tools for small business marketing' into slide 1 and "
@@ -361,6 +425,7 @@ def mock_plan() -> dict:
             },
             {
                 "day": "Wednesday",
+                "platform": "Instagram + TikTok",
                 "format": "Video / Reel",
                 "topic": "Building a tiny automation with Claude Code",
                 "idea": "Behind the scenes: building a tiny desktop helper with Claude Code",
@@ -389,8 +454,8 @@ def mock_plan() -> dict:
                     ),
                 },
                 "platforms": (
-                    "Reel for Instagram and TikTok; a longer cut for YouTube Shorts; a written "
-                    "walk-through as a LinkedIn post."
+                    "Reel for Instagram and TikTok; a longer cut for YouTube; a written "
+                    "walk-through as a LinkedIn post and a Substack issue."
                 ),
                 "geo_seo": (
                     "Say 'AI automation for small business' out loud in the hook (captions are "
@@ -399,6 +464,7 @@ def mock_plan() -> dict:
             },
             {
                 "day": "Friday",
+                "platform": "Instagram",
                 "format": "Post / graphic",
                 "topic": "Permission-slip reminder: done beats perfect",
                 "idea": "A kind reminder: done and shared beats perfect and hidden",
@@ -420,7 +486,7 @@ def mock_plan() -> dict:
                 },
                 "platforms": (
                     "Graphic for the Instagram feed; share to Stories; the same line works as a "
-                    "LinkedIn one-liner or a Pinterest pin."
+                    "LinkedIn one-liner or a short Substack note."
                 ),
                 "geo_seo": (
                     "Add descriptive alt text and a searchable caption ('small business "
@@ -428,6 +494,198 @@ def mock_plan() -> dict:
                 ),
             },
         ],
+        "video_strategy": {
+            "summary": (
+                "This week leans into video, Camille. 🌸 Short-form 'build/learn with me' "
+                "clips are getting strong reach right now, and long-form explainers are "
+                "doing well on YouTube as people search for practical AI help. So: two "
+                "videos — one fast short-form for TikTok that also fits Instagram (for "
+                "reach and saves), and one calm 10–15 min long-form for YouTube (for trust "
+                "and search/AI-answer discovery). The short-form rides the trend for a "
+                "traffic spike; the long-form keeps working for months."
+            ),
+            "videos": [
+                {
+                    "title": "5 AI tools doing my marketing for me",
+                    "platform": "TikTok (also fits Instagram Reels)",
+                    "format": "short-form",
+                    "length": "~45s",
+                    "why": (
+                        "Quick AI-tool roundups are trending and highly saveable; short-form "
+                        "is where the cold-reach spike is this week. Cross-posts to Reels "
+                        "with no re-edit."
+                    ),
+                    "script": {
+                        "hook": (
+                            "Handheld, 35mm, eye-level, fast 1-second push-in toward her face, "
+                            "bright window light. Exact words, said quickly with NO intro: "
+                            "'Stop paying for marketing you can do in 10 minutes — here are the "
+                            "5 AI tools doing mine for me.'"
+                        ),
+                        "shots": [
+                            {
+                                "camera": "a6700 handheld, 35mm, eye-level, quick push-in toward her face; bright window light.",
+                                "action": "Straight to camera, energetic, no preamble: 'Stop paying for marketing you can do in 10 minutes — here are the 5 AI tools doing mine for me.'",
+                            },
+                            {
+                                "camera": "Hard cut, same handheld look, tighter (chest-up); she holds up one finger.",
+                                "action": "'One — Claude for captions. I paste my messy voice notes and it writes captions that actually sound like me.'",
+                            },
+                            {
+                                "camera": "Quick cut to over-the-shoulder of the laptop, shallow depth of field, screen in focus.",
+                                "action": "Screen-recording overlay of a caption generating (~2s) while she says: 'No more staring at a blank box.'",
+                            },
+                            {
+                                "camera": "Cut back to handheld eye-level; two fingers up.",
+                                "action": "'Two — Canva. One brand kit, and every graphic is on-brand in minutes, not hours.'",
+                            },
+                            {
+                                "camera": "Hard cut, three fingers, slight whip-pan in.",
+                                "action": "'Three — CapCut to cut my reels. Auto-captions on, done before my coffee's cold.'",
+                            },
+                            {
+                                "camera": "Cut to a top-down of the Sony a6700 on the desk; four fingers held over it.",
+                                "action": "'Four — this little camera. Good light plus a 50mm and your content instantly looks more pro.'",
+                            },
+                            {
+                                "camera": "Slow push-in, warmer; five fingers, then a small smile.",
+                                "action": "'And five — the one that saves my weekends: Higgsfield, to pull it all into one cinematic edit.'",
+                            },
+                            {
+                                "camera": "Final beat, holding eye contact, settle and soften.",
+                                "action": "'Save this so you've got the list — then tell me which one you're grabbing first.'",
+                            },
+                        ],
+                        "b_roll": [
+                            "Screen recording: a caption generating in Claude (2–3s).",
+                            "Close-up of hands dragging a graphic into place in Canva.",
+                            "Over-shoulder of the CapCut timeline as auto-captions pop on.",
+                            "Top-down hero shot of the Sony a6700 on the desk, lens cap coming off.",
+                            "2-second before/after: blank caption box vs. finished post on the phone screen.",
+                        ],
+                        "captions": [
+                            "POV: your marketing runs itself 👀",
+                            "1. Claude → captions that sound like YOU",
+                            "2. Canva → on-brand in minutes",
+                            "3. CapCut → reels before your coffee's cold ☕",
+                            "4. Sony a6700 → instant 'pro' look",
+                            "5. Higgsfield → the cinematic edit ✨",
+                            "save this 🤍 which one first?",
+                        ],
+                        "cta": (
+                            "Said on camera and pinned as the first comment: 'Save this for your "
+                            "next content day — then drop the tool you're trying first and I'll "
+                            "reply with exactly how I use it.'"
+                        ),
+                    },
+                },
+                {
+                    "title": "How I built a tiny AI helper with Claude Code (no CS degree)",
+                    "platform": "YouTube",
+                    "format": "long-form",
+                    "length": "~12 min",
+                    "why": (
+                        "'Build with me' long-form is rising as non-developers search for "
+                        "practical AI tutorials. Evergreen: keeps pulling search and "
+                        "AI-answer traffic long after this week."
+                    ),
+                    "script": {
+                        "hook": (
+                            "Cold open, seated, 50mm, soft window light, shallow background. "
+                            "Exact words, calm and warm: 'I taught my computer to plan a whole "
+                            "week of my content for me — and I'm not a programmer. No CS "
+                            "degree, no bootcamp. Let me show you exactly how I built it.'"
+                        ),
+                        "shots": [
+                            {
+                                "camera": "Shot 1 (cold open) — a6700 on tripod, 50mm, eye-level, seated, shallow background, soft window light.",
+                                "action": "Exact words: 'I taught my computer to plan a whole week of my content for me — and I'm not a programmer.' Beat. 'No CS degree, no bootcamp. Let me show you exactly how.'",
+                            },
+                            {
+                                "camera": "Shot 2 (the promise) — slight reframe slightly wider, warm tone.",
+                                "action": "'By the end you'll know what it does, how I built it without code, and how you could make your own. Stick around for the live demo at the end.'",
+                            },
+                            {
+                                "camera": "Shot 3 (title card) — cut to a clean desk wide shot, gentle music up.",
+                                "action": "Title-card overlay holds 2–3s: 'How I built a tiny AI helper (no CS degree).'",
+                            },
+                            {
+                                "camera": "Shot 4 (Ch.1: the problem) — back to seated 50mm.",
+                                "action": "'Every Sunday I'd lose two hours staring at a blank content calendar. So I thought — what if something could draft it for me, in my voice?'",
+                            },
+                            {
+                                "camera": "Shot 5 (Ch.1 b-roll over voice) — cutaway: hand flipping a blank paper planner; clock on the wall.",
+                                "action": "Voiceover: 'I'm not technical. I just wanted my evenings back.'",
+                            },
+                            {
+                                "camera": "Shot 6 (Ch.2: the idea) — screen-share, full-frame, cursor visible.",
+                                "action": "Plain words: 'It's a little desktop helper. I ask it to plan my week, it researches what's trending, and it writes the posts.' Be honest about the messy first attempts.",
+                            },
+                            {
+                                "camera": "Shot 7 (Ch.2: the tools) — picture-in-picture: seated cam small in the corner, screen full.",
+                                "action": "'The only tools: Claude Code to build it, and one API key. That's genuinely it — everything's linked below.'",
+                            },
+                            {
+                                "camera": "Shot 8 (Ch.3: building it, part 1) — screen-share zoomed into the relevant area.",
+                                "action": "Narrate slowly while asking Claude Code to create the helper: 'Watch — I just describe what I want in plain English, and it writes the code.'",
+                            },
+                            {
+                                "camera": "Shot 9 (Ch.3 b-roll) — close-up of hands on the keyboard; slow pan across the desk.",
+                                "action": "Voiceover bridge: 'It wrote the first version in a couple of minutes. Then we fixed the bits that broke — and that part is completely normal.'",
+                            },
+                            {
+                                "camera": "Shot 10 (Ch.3: building it, part 2) — back to screen-share for one real fix.",
+                                "action": "Show one realistic bug and the calm fix: 'See? It's not magic — it's just patient back-and-forth.'",
+                            },
+                            {
+                                "camera": "Shot 11 (Ch.4: why it matters) — cut to seated 50mm, gentle push-in.",
+                                "action": "Reflective: 'Here's what surprised me — it didn't just save time. It made me want to create again, because the scary blank page was gone.'",
+                            },
+                            {
+                                "camera": "Shot 12 (Ch.5: live demo) — screen-share, full frame, real time; don't cut away while it works.",
+                                "action": "Run the finished helper live: 'Okay — let's actually run it… and there's my whole week.' Let it breathe.",
+                            },
+                            {
+                                "camera": "Shot 13 (Ch.5 b-roll) — close-up of the finished plan panel on the desktop; phone showing the Notion page.",
+                                "action": "Voiceover: 'It even writes the full scripts — like the one I'm reading from right now.'",
+                            },
+                            {
+                                "camera": "Shot 14 (recap) — back to seated 50mm, slightly wider, warm.",
+                                "action": "'Quick recap: one, you don't need to code. Two, start tiny. Three, let it be a little messy. That's the whole secret.'",
+                            },
+                            {
+                                "camera": "Shot 15 (outro/CTA) — final seated shot, gentle push-in, soft smile, music up.",
+                                "action": "Deliver the CTA (below), hold for a beat, then end card.",
+                            },
+                        ],
+                        "b_roll": [
+                            "Wide shot of the desk with the key light on and plants in frame (for the title card).",
+                            "Cutaway: a blank paper planner flipped open; a clock on the wall.",
+                            "Close-ups of hands typing in natural window light, for cutaways over narration.",
+                            "Slow 3-second pan across the workspace (camera, coffee, notebook).",
+                            "Screen-recording clips of the build for picture-in-picture cutaways.",
+                            "The finished helper running on the desktop, and the Notion page open on a phone.",
+                        ],
+                        "captions": [
+                            "How I built a tiny AI helper (no CS degree)",
+                            "Chapter 1 — the problem",
+                            "Chapter 2 — the idea",
+                            "Chapter 3 — building it (live)",
+                            "tip: it's okay for it to break 🤍",
+                            "Chapter 4 — why it actually matters",
+                            "Chapter 5 — the live demo",
+                            "everything's linked in the description ↓",
+                        ],
+                        "cta": (
+                            "Exact wording: 'If this made AI feel a little less scary, hit "
+                            "subscribe — I build one gentle little tool like this every week and "
+                            "walk you through it. The full steps and every link are in the "
+                            "description. I'll see you in the next one.'"
+                        ),
+                    },
+                },
+            ],
+        },
         "ai_news": {
             "headline": "(Sample) A new AI model made plain-language marketing copy easier",
             "in_plain_terms": (
@@ -523,41 +781,53 @@ def build_weekly_plan(use_mock: bool = False) -> dict:
 # === STANDALONE CLI ===
 
 def main() -> None:
-    """Generate a plan and (for a real run) write it to Notion.
+    """Generate a plan and (unless it's a local-only mock) write it to Notion.
 
-    `--mock` produces the free sample plan and writes it locally only — no API
-    call and no Notion write — for inspecting the data or feeding the panel.
-    With no flag it makes one real research call and publishes the full plan to
-    Camille's Notion page (the one real end-to-end test).
+    `--mock` produces the free sample plan with NO API call. On its own it writes
+    locally only — for inspecting the data or feeding the panel. Add `--to-notion`
+    to also publish that sample to Notion: still free (a Notion write costs
+    nothing; only the research call costs credit), so it's the way to preview the
+    full layout — including the video scripts — at zero cost. With no flag it
+    makes one real research call and publishes the real plan (the paid run).
     """
     parser = argparse.ArgumentParser(description="Generate the weekly content plan.")
     parser.add_argument(
         "--mock",
         action="store_true",
-        help="Use a free sample plan; write locally only (no API call, no Notion).",
+        help="Use a free sample plan, no API call (writes locally unless --to-notion).",
+    )
+    parser.add_argument(
+        "--to-notion",
+        action="store_true",
+        help="Publish to Notion. With --mock this previews the layout for free; it "
+        "REPLACES the page's current contents.",
     )
     args = parser.parse_args()
 
-    print("Putting your plan together…" if not args.mock else "Building a sample plan…")
+    # A real run always publishes; a mock publishes only when explicitly asked.
+    write_to_notion = (not args.mock) or args.to_notion
+
+    print("Building a sample plan…" if args.mock else "Putting your plan together…")
     plan = build_weekly_plan(use_mock=args.mock)
     write_plan(plan)
 
     if "error" in plan:
         print(f"Note: {plan['error']}")
         return
-    if args.mock:
+    if not write_to_notion:
         print(f"Sample plan written to {PLAN_PATH.name} (no Notion write).")
         return
 
-    # Imported here (not at module load) so the mock path never needs the Notion
-    # library, and to keep the brain independent of the publishing step.
+    # Imported here (not at module load) so the local-only path never needs the
+    # Notion library, and to keep the brain independent of the publishing step.
     from notion_sync import page_url, publish_plan
 
+    label = "sample plan" if args.mock else "full plan"
     error = publish_plan(plan)
     if error:
         print(error)
     else:
-        print(f"Published your full plan to Notion: {page_url()}")
+        print(f"Published your {label} to Notion: {page_url()}")
 
 
 if __name__ == "__main__":
