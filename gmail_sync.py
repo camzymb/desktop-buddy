@@ -23,6 +23,7 @@ before it gets wired into the Morning Brief:
 # === IMPORTS ===
 
 import base64
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, time
@@ -36,6 +37,8 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 import google_auth
+
+logger = logging.getLogger(__name__)
 
 
 # === CONSTANTS ===
@@ -181,10 +184,14 @@ def count_unread_today() -> int:
             .execute()
         )
     except HttpError as error:
+        logger.warning("Gmail request failed: HTTP %s", error.resp.status)
         raise GmailSyncError(
             f"Gmail returned an error (HTTP {error.resp.status})."
         ) from error
     except (GoogleAuthError, OSError) as error:
+        logger.warning(
+            "Gmail request failed: could not reach Gmail (%s)", type(error).__name__
+        )
         raise GmailSyncError(
             "Couldn't reach Gmail. Check your internet connection and try again."
         ) from error
@@ -248,10 +255,14 @@ def fetch_important_today() -> list[ImportantEmail]:
                 )
         return important
     except HttpError as error:
+        logger.warning("Gmail request failed: HTTP %s", error.resp.status)
         raise GmailSyncError(
             f"Gmail returned an error (HTTP {error.resp.status})."
         ) from error
     except (GoogleAuthError, OSError) as error:
+        logger.warning(
+            "Gmail request failed: could not reach Gmail (%s)", type(error).__name__
+        )
         raise GmailSyncError(
             "Couldn't reach Gmail. Check your internet connection and try again."
         ) from error
@@ -326,10 +337,14 @@ def fetch_important_for_reply(max_emails: int = MAX_REPLY_DRAFTS) -> list[Replya
             )
         return replyable
     except HttpError as error:
+        logger.warning("Gmail request failed: HTTP %s", error.resp.status)
         raise GmailSyncError(
             f"Gmail returned an error (HTTP {error.resp.status})."
         ) from error
     except (GoogleAuthError, OSError) as error:
+        logger.warning(
+            "Gmail request failed: could not reach Gmail (%s)", type(error).__name__
+        )
         raise GmailSyncError(
             "Couldn't reach Gmail. Check your internet connection and try again."
         ) from error

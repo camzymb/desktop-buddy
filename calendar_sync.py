@@ -18,6 +18,7 @@ and confirm calendar access before it gets wired into the app:
 
 # === IMPORTS ===
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from pathlib import Path
@@ -28,6 +29,8 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 import google_auth
+
+logger = logging.getLogger(__name__)
 
 
 # === CONSTANTS ===
@@ -132,16 +135,23 @@ def fetch_todays_events() -> list[CalendarEvent]:
             .execute()
         )
     except HttpError as error:
+        logger.warning("Calendar fetch failed: HTTP %s", error.resp.status)
         raise CalendarSyncError(
             f"Google Calendar returned an error (HTTP {error.resp.status})."
         ) from error
     except (GoogleAuthError, OSError) as error:
+        logger.warning(
+            "Calendar fetch failed: could not reach Google Calendar (%s)",
+            type(error).__name__,
+        )
         raise CalendarSyncError(
             "Couldn't reach Google Calendar. Check your internet connection "
             "and try again."
         ) from error
 
-    return [_to_event(item) for item in response.get("items", [])]
+    events = [_to_event(item) for item in response.get("items", [])]
+    logger.debug("Fetched %d calendar event(s) for today", len(events))
+    return events
 
 
 def _todays_window() -> tuple[str, str]:

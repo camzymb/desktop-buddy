@@ -16,12 +16,15 @@ contents are never printed.
 
 # === IMPORTS ===
 
+import logging
 from pathlib import Path
 
 from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
+
+logger = logging.getLogger(__name__)
 
 
 # === CONSTANTS ===
@@ -56,6 +59,10 @@ def load_credentials(
             credentials = Credentials.from_authorized_user_file(str(token_path), scopes)
         except ValueError:
             # Corrupt or incompatible token file — treat as no token.
+            logger.warning(
+                "Ignoring unreadable token file %s; re-authentication needed.",
+                token_path.name,
+            )
             credentials = None
 
     if credentials and credentials.valid:
@@ -65,6 +72,11 @@ def load_credentials(
         try:
             credentials.refresh(Request())
         except RefreshError as error:
+            logger.warning(
+                "Token refresh failed for %s (%s); sign-in required.",
+                token_path.name,
+                type(error).__name__,
+            )
             raise error_class(expired_message) from error
         _save_token(credentials, token_path)
         return credentials

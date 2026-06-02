@@ -23,9 +23,12 @@ caller.
 
 # === IMPORTS ===
 
+import logging
 import os
 
 from content_planner import load_env_file
+
+logger = logging.getLogger(__name__)
 
 # === CONSTANTS ===
 
@@ -96,6 +99,7 @@ def publish_plan(plan: dict) -> str:
         from notion_client import Client
         from notion_client.errors import APIResponseError, HTTPResponseError
     except ImportError:
+        logger.warning("Notion library not installed; cannot publish the plan.")
         return MISSING_LIBRARY_MESSAGE
 
     client = Client(auth=token)
@@ -105,9 +109,12 @@ def publish_plan(plan: dict) -> str:
         _archive_week(client, page_id, title, blocks)
     except APIResponseError:
         # 401/403/404 almost always mean a bad token or an unshared page.
+        logger.warning("Notion publish failed: API response error (bad token or unshared page).")
         return ACCESS_ERROR_MESSAGE
-    except (HTTPResponseError, OSError):
+    except (HTTPResponseError, OSError) as error:
+        logger.warning("Notion publish failed (%s).", type(error).__name__)
         return GENERIC_ERROR_MESSAGE
+    logger.info("Published weekly plan to Notion.")
     return ""
 
 

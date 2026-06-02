@@ -33,6 +33,7 @@ Anthropic call and NO Gmail access at all:
 # === IMPORTS ===
 
 import argparse
+import logging
 from dataclasses import dataclass
 from urllib.parse import urlencode
 
@@ -43,6 +44,8 @@ from gmail_sync import (
     ReplyableEmail,
     fetch_important_for_reply,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # === CONSTANTS ===
@@ -183,7 +186,8 @@ def _draft_one(client, email: ReplyableEmail) -> str | None:
             system=_system_prompt(),
             messages=[{"role": "user", "content": _user_prompt(email)}],
         )
-    except anthropic.APIError:
+    except anthropic.APIError as error:
+        logger.warning("Draft skipped: Anthropic API error (%s).", type(error).__name__)
         return None
     text = "".join(block.text for block in response.content if block.type == "text")
     return text.strip() or None
@@ -212,11 +216,13 @@ def draft_replies(use_mock: bool = False) -> DraftBatch:
     try:
         import anthropic
     except ImportError:
+        logger.warning("Anthropic SDK not installed; cannot draft replies.")
         return DraftBatch(drafts=[], message=MISSING_SDK_MESSAGE)
 
     try:
         emails = fetch_important_for_reply()
     except GmailSyncError as error:
+        logger.warning("Draft replies: Gmail fetch failed (%s).", type(error).__name__)
         return DraftBatch(drafts=[], message=str(error))
 
     if not emails:

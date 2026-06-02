@@ -41,11 +41,14 @@ plan with no API call and no Notion write:
 
 import argparse
 import json
+import logging
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from sample_plan import sample_plan
+
+logger = logging.getLogger(__name__)
 
 
 # === CONSTANTS ===
@@ -116,7 +119,10 @@ def load_env_file() -> None:
     """
     try:
         lines = ENV_PATH.read_text(encoding="utf-8").splitlines()
-    except OSError:
+    except OSError as error:
+        # A missing .env is normal (env vars may come from the shell); note it
+        # quietly for diagnosis without implying something broke.
+        logger.debug(".env not loaded (%s)", type(error).__name__)
         return
     for line in lines:
         stripped = line.strip()
@@ -139,8 +145,8 @@ def write_plan(plan: dict) -> None:
     """
     try:
         PLAN_PATH.write_text(json.dumps(plan, indent=2), encoding="utf-8")
-    except OSError:
-        pass
+    except OSError as error:
+        logger.warning("Could not write plan file %s (%s)", PLAN_PATH.name, type(error).__name__)
 
 
 def load_plan_payload() -> dict:
@@ -151,7 +157,9 @@ def load_plan_payload() -> dict:
     """
     try:
         return json.loads(PLAN_PATH.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError) as error:
+        # Usually just "no plan saved yet" (normal); note it at debug level.
+        logger.debug("No saved plan to load (%s)", type(error).__name__)
         return {"error": "No plan yet — ask your buddy to plan your week. 🌸"}
 
 
@@ -462,6 +470,7 @@ def build_weekly_plan(use_mock: bool = False) -> dict:
     try:
         import anthropic
     except ImportError:
+        logger.warning("Anthropic SDK not installed; cannot generate the weekly plan.")
         return {
             "error": (
                 "The Anthropic library isn't installed yet. 🤍 Run "
@@ -489,18 +498,22 @@ def build_weekly_plan(use_mock: bool = False) -> dict:
                 continue
             break
     except anthropic.AuthenticationError:
+        logger.warning("Weekly plan: Anthropic authentication failed (bad/expired key).")
         return {"error": MISSING_KEY_MESSAGE}
-    except anthropic.APIError:
+    except anthropic.APIError as error:
+        logger.warning("Weekly plan: Anthropic API error (%s).", type(error).__name__)
         return {"error": GENERIC_ERROR_MESSAGE}
 
     reply = "".join(block.text for block in response.content if block.type == "text")
     try:
         plan = _extract_json(reply)
     except ValueError:
+        logger.warning("Weekly plan: could not parse the model's reply as JSON.")
         return {"error": GENERIC_ERROR_MESSAGE}
 
     # Stamp the week label in case the model phrased it differently.
     plan.setdefault("week_of", _week_label(today))
+    logger.info("Weekly plan generated (%d piece(s)).", len(plan.get("pieces", [])))
     return plan
 
 

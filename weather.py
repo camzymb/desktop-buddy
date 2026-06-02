@@ -22,9 +22,12 @@ Run directly to print the current weather (a free, no-key request):
 # === IMPORTS ===
 
 import json
+import logging
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 # === CONSTANTS ===
 
@@ -101,7 +104,10 @@ def _get_json(url: str) -> dict | None:
     try:
         with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
             return json.loads(response.read().decode("utf-8"))
-    except (urllib.error.URLError, OSError, ValueError):
+    except (urllib.error.URLError, OSError, ValueError) as error:
+        # Log the failure type only — never the URL, which carries the
+        # approximate location.
+        logger.warning("Weather lookup failed (%s)", type(error).__name__)
         return None
 
 
