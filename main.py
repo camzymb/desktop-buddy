@@ -8,6 +8,7 @@ are read here and passed into the overlay.
 
 # === IMPORTS ===
 
+import logging
 import sys
 from pathlib import Path
 
@@ -28,6 +29,9 @@ from buddy_config import (
     SIMULATE_REMINDER_FLAG,
 )
 from buddy_overlay import BuddyOverlay
+from logging_config import setup_logging
+
+logger = logging.getLogger(__name__)
 
 
 # === ENTRY POINT ===
@@ -62,6 +66,11 @@ def main() -> int:
     the wlr/ext layer-shell protocol (via the layer-shell-qt plugin), which
     stock PyQt6 does not expose — a larger change left for a later chunk.
     """
+    # Configure logging before anything else can fail, so early problems land in
+    # the log file. Quiet console by default; BUDDY_LOG_LEVEL=DEBUG for verbose.
+    setup_logging()
+    logger.info("Desktop Buddy starting (args: %s)", sys.argv[1:])
+
     app = QApplication(sys.argv)
     # Taskbar/dock icon. setDesktopFileName lets Wayland tie the window to the
     # autostart .desktop entry (and its icon); setWindowIcon covers the rest.
@@ -72,6 +81,7 @@ def main() -> int:
     # what keeps autostart-on-login from ever spawning a second girl.
     instance_lock = _acquire_single_instance_lock()
     if instance_lock is None:
+        logger.info("Another buddy is already running; exiting.")
         print("Desktop Buddy is already running — not starting another.")
         return 0
 
@@ -88,6 +98,7 @@ def main() -> int:
     try:
         return app.exec()
     finally:
+        logger.info("Desktop Buddy exiting.")
         instance_lock.unlock()
 
 
