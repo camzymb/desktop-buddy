@@ -40,6 +40,7 @@ from pathlib import Path
 from PyQt6.QtCore import (
     QAbstractAnimation,
     QEasingCurve,
+    QEvent,
     QPoint,
     QPointF,
     QPropertyAnimation,
@@ -51,6 +52,8 @@ from PyQt6.QtCore import (
 )
 from PyQt6.QtGui import (
     QColor,
+    QCursor,
+    QEnterEvent,
     QFont,
     QFontDatabase,
     QFontMetrics,
@@ -60,9 +63,10 @@ from PyQt6.QtGui import (
     QPen,
     QPixmap,
     QPolygonF,
+    QResizeEvent,
     QWheelEvent,
 )
-from PyQt6.QtWidgets import QWidget
+from PyQt6.QtWidgets import QGraphicsOpacityEffect, QHBoxLayout, QPushButton, QWidget
 
 from calendar_sync import CalendarEvent, CalendarSyncError, fetch_todays_events
 
@@ -160,6 +164,23 @@ SCROLLBAR_MARGIN_PX = 4
 SCROLLBAR_MIN_THUMB_PX = 28
 SCROLLBAR_COLOR = QColor(120, 108, 112, 130)
 
+# --- Window controls (hover-reveal buttons) ---
+# Two small buttons (restore-to-full, close) fade in at the top-right when the
+# pointer is over the card, and fade out otherwise — so the hand-painted art is
+# left untouched whenever it's just being looked at. They're positioned by
+# fraction of the window, landing in the plain-pink band right of the "Date:" box,
+# clear of the corner flowers and the heart border.
+CONTROL_BUTTON_SIZE_PX = 22
+CONTROL_BUTTON_SPACING_PX = 6
+CONTROL_TOP_FRAC = 0.085       # top inset, just below the flower/heart/title row
+CONTROL_RIGHT_FRAC = 0.07      # right inset, clear of the right edge
+CONTROL_FADE_MS = 140          # gentle fade in/out
+MAXIMIZE_GLYPH = "□"
+CLOSE_GLYPH = "✕"
+# Glyph colour for the controls: the same deep rose as the checkbox ticks, so the
+# buttons feel part of the art rather than bolted on.
+CONTROL_GLYPH_COLOR = "#b02846"   # matches CHECK_COLOR
+
 # Hold off painting overlaid text until the card has nearly finished growing,
 # so the seed reads as a clean nub rather than clipped text.
 PANEL_CONTENT_REVEAL_FRACTION = 0.85
@@ -237,6 +258,9 @@ class CalloutPanel(QWidget):
 
     # Emitted from the background fetch thread; delivered on the GUI thread.
     events_loaded = pyqtSignal(list, str)
+    # Emitted when the ✕ control is clicked, so the owner can retract the card
+    # into the buddy (keeping the pretty animation, and letting 'P' reopen it).
+    close_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget, on_geometry_change: Callable[[], None]) -> None:
         super().__init__(parent)
@@ -290,6 +314,9 @@ class CalloutPanel(QWidget):
         self._anim.valueChanged.connect(self._on_anim_value_changed)
         self._anim.finished.connect(self._on_anim_finished)
 
+        # The hover-reveal window controls (restore-to-full and close).
+        self._build_controls()
+
     # --- public API ---
 
     def set_checklists(self, must_do: list[str], goals: list[str]) -> None:
@@ -335,6 +362,7 @@ class CalloutPanel(QWidget):
     def pop_out(self, seed_center: QPoint, final_rect: QRect) -> None:
         """Grow from a small seed at seed_center out to final_rect, with a pop."""
         self._is_open = True
+        self._hide_controls_immediately()
         self._final_rect = final_rect
         self._scroll_x = 0  # always open scrolled to the top-left
         self._scroll_y = 0
@@ -507,6 +535,142 @@ class CalloutPanel(QWidget):
         else:
             self.hide()
         self._on_geometry_change()
+
+    # --- window controls (hover-reveal buttons) ---
+
+    def _build_controls(self) -> None:
+        """Create the hover-reveal control cluster: full-size and close.
+
+        The buttons share one container so a single opacity animation fades them
+        in and out together. They start hidden; `enterEvent` reveals them and
+        `leaveEvent` tucks them away, leaving the art untouched at rest.
+        """
+        self._controls = QWidget(self)
+        row = QHBoxLayout(self._controls)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(CONTROL_BUTTON_SPACING_PX)
+        self._maximize_button = self._make_control_button(MAXIMIZE_GLYPH, "Full size", self._on_maximize)
+        self._close_button = self._make_control_button(CLOSE_GLYPH, "Close", self._on_close)
+        row.addWidget(self._maximize_button)
+        row.addWidget(self._close_button)
+        self._controls.adjustSize()
+
+        # One opacity effect + animation drives the gentle fade for all three.
+        self._controls_opacity = QGraphicsOpacityEffect(self._controls)
+        self._controls_opacity.setOpacity(0.0)
+        self._controls.setGraphicsEffect(self._controls_opacity)
+        self._controls_fade = QPropertyAnimation(self._controls_opacity, b"opacity", self)
+        self._controls_fade.setDuration(CONTROL_FADE_MS)
+        self._controls_fade.finished.connect(self._on_controls_fade_finished)
+        self._controls.hide()
+
+    def _make_control_button(
+        self, glyph: str, tooltip: str, handler: "Callable[[], None]"
+    ) -> QPushButton:
+        """Build one small, round, semi-transparent control button over the art."""
+        button = QPushButton(glyph, self._controls)
+        button.setToolTip(tooltip)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setFixedSize(CONTROL_BUTTON_SIZE_PX, CONTROL_BUTTON_SIZE_PX)
+        button.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # don't steal the overlay's key focus
+        button.setStyleSheet(
+            f"""
+            QPushButton {{ color: {CONTROL_GLYPH_COLOR};
+                    background: rgba(255, 255, 255, 0.72);
+                    border: 1px solid rgba(176, 40, 70, 0.35);
+                    border-radius: {CONTROL_BUTTON_SIZE_PX // 2}px;
+                    font-size: 12px; font-weight: 600; padding: 0; }}
+            QPushButton:hover {{ background: rgba(255, 255, 255, 0.96); }}
+            """
+        )
+        button.clicked.connect(lambda _checked=False: handler())
+        return button
+
+    def _position_controls(self) -> None:
+        """Place the control cluster in the plain-pink band at the top-right."""
+        self._controls.adjustSize()
+        x = int(self.width() * (1 - CONTROL_RIGHT_FRAC)) - self._controls.width()
+        y = int(self.height() * CONTROL_TOP_FRAC)
+        self._controls.move(max(0, x), max(0, y))
+
+    def enterEvent(self, event: QEnterEvent) -> None:
+        """Reveal the controls when the pointer moves over the open, full card."""
+        self._show_controls()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event: QEvent) -> None:
+        """Hide the controls when the pointer truly leaves the card.
+
+        Moving onto a child button fires leaveEvent on the card too, so only hide
+        when the cursor is actually outside the card's bounds.
+        """
+        if not self.rect().contains(self.mapFromGlobal(QCursor.pos())):
+            self._hide_controls()
+        super().leaveEvent(event)
+
+    def _show_controls(self) -> None:
+        """Fade the controls in — but not while the card is closed or animating."""
+        if not self._is_open:
+            return
+        if self._anim.state() == QAbstractAnimation.State.Running:
+            return
+        self._position_controls()
+        self._controls.show()
+        self._controls.raise_()
+        self._fade_controls_to(1.0)
+
+    def _hide_controls(self) -> None:
+        """Fade the controls out; they hide fully on finish so clicks stop landing."""
+        if not self._controls.isVisible():
+            return
+        self._fade_controls_to(0.0)
+
+    def _hide_controls_immediately(self) -> None:
+        """Snap the controls to hidden with no fade (e.g. on open/close)."""
+        self._controls_fade.stop()
+        self._controls_opacity.setOpacity(0.0)
+        self._controls.hide()
+
+    def _fade_controls_to(self, target: float) -> None:
+        """Animate the cluster opacity toward target (0 hidden … 1 fully shown)."""
+        self._controls_fade.stop()
+        self._controls_fade.setStartValue(self._controls_opacity.opacity())
+        self._controls_fade.setEndValue(target)
+        self._controls_fade.start()
+
+    def _on_controls_fade_finished(self) -> None:
+        """Once faded to transparent, hide so the buttons stop catching clicks."""
+        if self._controls_opacity.opacity() <= 0.01:
+            self._controls.hide()
+
+    def _on_maximize(self) -> None:
+        """Grow the card back to its full default post-it size, at its current spot."""
+        parent = self.parentWidget()
+        full_size = (
+            self.left_slot_rect(parent.height()).size() if parent is not None else self.size()
+        )
+        self._apply_full_size(QRect(self.pos(), full_size))
+
+    def _on_close(self) -> None:
+        """Ask the owner to retract the card into the buddy (so 'P' reopens it)."""
+        self._hide_controls_immediately()
+        self.close_requested.emit()
+
+    def _apply_full_size(self, rect: QRect) -> None:
+        """Settle into rect (clamped on-screen) and repaint — used by the □ button."""
+        rect = self._clamp_to_parent(rect)
+        self._final_rect = rect
+        content_w, content_h = self._content_size()
+        self._rescale_background(content_w, content_h)
+        self.setGeometry(rect)
+        self._clamp_scroll()
+        self._on_geometry_change()
+        self.update()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        """Keep the hover controls glued to the top-right as the window resizes."""
+        self._position_controls()
+        super().resizeEvent(event)
 
     # --- interaction ---
 

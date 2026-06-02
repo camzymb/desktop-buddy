@@ -390,6 +390,8 @@ class BuddyOverlay(QWidget):
         # on every animation frame via the callback so it stays visible while
         # the rest of the desktop remains click-through.
         self._callout_panel = CalloutPanel(self, self._update_input_mask)
+        # The card's ✕ control asks us to retract it into the buddy; 'P' reopens it.
+        self._callout_panel.close_requested.connect(self._retract_callout_panel)
         self._callout_panel.set_checklists(list(PANEL_MUST_DO_ITEMS), list(PANEL_GOAL_ITEMS))
         self._callout_panel.set_note(PANEL_NOTE)
         # Compact weekly-plan overview card; links to the full plan in Notion.
@@ -985,6 +987,11 @@ class BuddyOverlay(QWidget):
         seed_center = self._sprite_label.geometry().center()
         final_rect = self._callout_panel.parked_rect(self.height())
         self._callout_panel.pop_out(seed_center, final_rect)
+
+    def _retract_callout_panel(self) -> None:
+        """Retract the daily-summary card into the buddy (its ✕ button); 'P' reopens."""
+        if self._callout_panel.is_open:
+            self._callout_panel.retract(self._sprite_label.geometry().center())
 
     # --- startup greeting ---
 
