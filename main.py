@@ -14,6 +14,7 @@ clip, and she switches to a friendly expression before resuming her wander.
 
 # === IMPORTS ===
 
+import json
 import math
 import random
 import sys
@@ -42,6 +43,7 @@ from calendar_sync import CalendarEvent, due_reminders, fetch_todays_events
 from callout_panel import CalloutPanel
 from callout_server import HOST, PORT, create_server
 from content_planner import build_weekly_plan, load_plan_payload, write_plan
+from morning_brief import gather_brief, mock_brief
 from notion_sync import page_url, publish_plan
 from plan_panel import PlanPanel
 from quotes import MOTIVATIONAL_QUOTES
@@ -115,6 +117,13 @@ STARTUP_PANEL_DELAY_MS = 1400
 LOGIN_GREETING = "Welcome back, Camille. Take it gentle today."
 LOGIN_VOICE_FILENAME = "voice_welcomeBack.mp3"
 
+# The morning brief stands in for the plain welcome-back line the first time she
+# launches each day (its words are gathered live — see the Morning brief section
+# below). Like the login moment, it pairs the bubble text with one fixed recorded
+# clip: her warm "good morning" in her own voice (audio.py plays the clip; the
+# day's actual weather/calendar/email show in the bubble, never sent anywhere).
+BRIEF_VOICE_FILENAME = "voice_morning.mp3"
+
 # How long the speech bubble stays fully visible between fade-in and fade-out.
 BUBBLE_HOLD_MS = 7000
 
@@ -185,6 +194,23 @@ SIMULATE_REMINDER_DELAY_MS = 3000
 # because key handling is unreliable on Wayland.
 PLAN_WEEK_FLAG = "--plan-week"
 PLAN_MOCK_FLAG = "--mock"
+
+# --- Morning brief ---
+
+# The brief normally fires on its own the first time she launches each new day.
+# These launch flags force it immediately for testing, so you don't wait for
+# tomorrow morning: --brief-now gathers REAL live data (weather + calendar +
+# email); --brief-mock uses fixed sample data with NO network or Gmail calls,
+# free to run. (Plain --mock is already the planner's, so the brief has its own.)
+# Forcing the brief does NOT consume the once-a-day marker below, so a real first
+# launch still greets you — testing never "uses up" your morning.
+BRIEF_NOW_FLAG = "--brief-now"
+BRIEF_MOCK_FLAG = "--brief-mock"
+
+# Remembers the date she last delivered the brief, so it fires once per day and
+# not on every relaunch. Machine-specific (and personal-adjacent) — gitignored,
+# never shared; same local-state pattern as the panels' remembered positions.
+BRIEF_STATE_PATH = PROJECT_DIR / "brief_state.json"
 
 # She gives a gentle heads-up while researching, then speaks up when ready.
 PLAN_WORKING_MESSAGE = "Working on your weekly content plan… 🌸"
@@ -290,6 +316,10 @@ class BuddyOverlay(QWidget):
     # ("" on success) so the result is handled safely on the GUI thread.
     plan_ready = pyqtSignal(str)
 
+    # Emitted from the background morning-brief thread; carries the composed brief
+    # text (empty if gathering fell over) for safe display on the GUI thread.
+    brief_ready = pyqtSignal(str)
+
     # --- setup ---
 
     def __init__(
@@ -298,11 +328,15 @@ class BuddyOverlay(QWidget):
         simulate_reminder: bool = False,
         plan_week: bool = False,
         plan_week_mock: bool = False,
+        brief_now: bool = False,
+        brief_mock: bool = False,
     ) -> None:
         super().__init__()
         self._simulate_reminder_on_start = simulate_reminder
         self._plan_week_on_start = plan_week
         self._plan_week_mock = plan_week_mock
+        self._brief_now_on_start = brief_now
+        self._brief_mock_on_start = brief_mock
         self._configure_window()
 
         # Preload every sprite already scaled to BUDDY_HEIGHT_PX tall.
@@ -396,6 +430,7 @@ class BuddyOverlay(QWidget):
         self._reminded_event_ids: set[str] = set()
         self.reminder_events_loaded.connect(self._on_reminder_events_loaded)
         self.plan_ready.connect(self._on_plan_ready)
+        self.brief_ready.connect(self._on_brief_ready)
 
         self._reminder_check_timer = QTimer(self)
         self._reminder_check_timer.setInterval(REMINDER_CHECK_INTERVAL_MS)
@@ -497,6 +532,16 @@ class BuddyOverlay(QWidget):
         # cycle via _on_bubble_hidden()).
         if self._simulate_reminder_on_start:
             QTimer.singleShot(SIMULATE_REMINDER_DELAY_MS, self._simulate_reminder)
+        elif (
+            self._brief_now_on_start
+            or self._brief_mock_on_start
+            or self._claim_todays_brief()
+        ):
+            # First launch of the day (or a --brief-now/--brief-mock test flag):
+            # the morning brief stands in for the plain welcome-back greeting.
+            # Order matters — a test flag short-circuits before _claim_todays_brief
+            # so forcing the brief never consumes the real once-a-day marker.
+            QTimer.singleShot(STARTUP_GREETING_DELAY_MS, self._run_morning_brief)
         else:
             self._startup_timer.start(STARTUP_GREETING_DELAY_MS)
 
@@ -898,6 +943,73 @@ class BuddyOverlay(QWidget):
         self._begin_talking(LOGIN_GREETING, voice=LOGIN_VOICE_FILENAME)
         self._startup_panel_timer.start(STARTUP_PANEL_DELAY_MS)
 
+    # --- morning brief ---
+
+    def _claim_todays_brief(self) -> bool:
+        """True the first time she launches on a new day — and marks today claimed.
+
+        Compares today's date against the date stored in a small local state file
+        (gitignored) and, on the first launch of a new day, rewrites it with
+        today's so later relaunches the same day return False and skip the brief.
+        Any read/write hiccup is treated as "not done yet", so the worst case is
+        the brief showing again rather than a crash or a silently swallowed day.
+        """
+        today = datetime.now().astimezone().strftime("%Y-%m-%d")
+        try:
+            saved = json.loads(BRIEF_STATE_PATH.read_text(encoding="utf-8"))
+            already_today = saved.get("last_brief_date") == today
+        except (OSError, ValueError):
+            already_today = False
+        if already_today:
+            return False
+        try:
+            BRIEF_STATE_PATH.write_text(
+                json.dumps({"last_brief_date": today}), encoding="utf-8"
+            )
+        except OSError:
+            pass
+        return True
+
+    def _run_morning_brief(self) -> None:
+        """Gather the brief in the background, then speak it; open the post-it too.
+
+        Gathering touches the network (weather + calendar + Gmail), so it runs off
+        the GUI thread to keep her from freezing mid-step; the composed words come
+        back via the brief_ready signal (see _on_brief_ready). The post-it opens a
+        beat later, exactly as it does after the normal welcome-back greeting.
+        """
+        threading.Thread(
+            target=self._gather_brief_worker, name="morning-brief", daemon=True
+        ).start()
+        self._startup_panel_timer.start(STARTUP_PANEL_DELAY_MS)
+
+    def _gather_brief_worker(self) -> None:
+        """Compose the brief off the GUI thread and hand the words back via a signal.
+
+        --brief-mock uses fixed sample data (no calls, no cost); otherwise she
+        gathers live weather/calendar/email. The brief already drops any single
+        source that fails on its own; we still guard the unexpected here so a bad
+        morning can never take the buddy down at startup — worst case she simply
+        skips the brief (an empty string, handled in _on_brief_ready).
+        """
+        try:
+            brief = mock_brief() if self._brief_mock_on_start else gather_brief()
+        except Exception:  # noqa: BLE001 — a startup nicety must never crash the app
+            brief = ""
+        self.brief_ready.emit(brief)
+
+    def _on_brief_ready(self, brief: str) -> None:
+        """Speak the gathered brief in her bubble + recorded voice (GUI thread).
+
+        Reached via the brief_ready signal once the background gather finishes. An
+        empty string means gathering fell over entirely — she just stays quiet
+        rather than popping a blank bubble. Otherwise the words appear in the
+        bubble while her recorded "good morning" clip plays alongside, and the
+        normal talk cycle resumes afterwards via _on_bubble_hidden().
+        """
+        if brief:
+            self._begin_talking(brief, voice=BRIEF_VOICE_FILENAME)
+
     # --- weekly content planner ---
 
     def _start_weekly_plan(self) -> None:
@@ -1171,6 +1283,8 @@ def main() -> int:
         simulate_reminder=SIMULATE_REMINDER_FLAG in sys.argv,
         plan_week=PLAN_WEEK_FLAG in sys.argv,
         plan_week_mock=PLAN_MOCK_FLAG in sys.argv,
+        brief_now=BRIEF_NOW_FLAG in sys.argv,
+        brief_mock=BRIEF_MOCK_FLAG in sys.argv,
     )
     overlay.showMaximized()
     try:
