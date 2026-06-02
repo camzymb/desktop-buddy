@@ -22,12 +22,12 @@ from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from pathlib import Path
 
-from google.auth.exceptions import GoogleAuthError, RefreshError
-from google.auth.transport.requests import Request
+from google.auth.exceptions import GoogleAuthError
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+
+import google_auth
 
 
 # === CONSTANTS ===
@@ -88,51 +88,20 @@ class CalendarEvent:
 def _load_credentials() -> Credentials:
     """Return valid read-only credentials, signing in or refreshing as needed.
 
-    Reuses token.json when possible, refreshes it silently when expired, and
-    only falls back to the browser consent flow when there's no usable token.
+    Delegates to the shared `google_auth.load_credentials`, passing this module's
+    own token file, scope, error type, and expiry wording so behavior is
+    unchanged — the scope stays `calendar.readonly`, read-only.
     """
-    credentials: Credentials | None = None
-    if TOKEN_PATH.exists():
-        try:
-            credentials = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
-        except ValueError:
-            # Corrupt or incompatible token file — treat as no token.
-            credentials = None
-
-    if credentials and credentials.valid:
-        return credentials
-
-    if credentials and credentials.expired and credentials.refresh_token:
-        try:
-            credentials.refresh(Request())
-        except RefreshError as error:
-            raise CalendarSyncError(
-                "Your saved Google sign-in has expired. Delete token.json and "
-                "run again to sign in."
-            ) from error
-        _save_token(credentials)
-        return credentials
-
-    return _run_consent_flow()
-
-
-def _run_consent_flow() -> Credentials:
-    """Open the browser for Google sign-in and cache the resulting token."""
-    if not CREDENTIALS_PATH.exists():
-        raise CalendarSyncError(
-            "Missing credentials.json. Download your OAuth client from the "
-            "Google Cloud console and place it in the project root."
-        )
-    flow = InstalledAppFlow.from_client_secrets_file(str(CREDENTIALS_PATH), SCOPES)
-    credentials = flow.run_local_server(port=0)
-    _save_token(credentials)
-    return credentials
-
-
-def _save_token(credentials: Credentials) -> None:
-    """Write the sign-in token to token.json, readable only by the user."""
-    TOKEN_PATH.write_text(credentials.to_json())
-    TOKEN_PATH.chmod(0o600)
+    return google_auth.load_credentials(
+        token_path=TOKEN_PATH,
+        scopes=SCOPES,
+        credentials_path=CREDENTIALS_PATH,
+        error_class=CalendarSyncError,
+        expired_message=(
+            "Your saved Google sign-in has expired. Delete token.json and "
+            "run again to sign in."
+        ),
+    )
 
 
 # === FETCHING ===
