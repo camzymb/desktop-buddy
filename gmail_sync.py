@@ -22,6 +22,8 @@ before it gets wired into the Morning Brief:
 
 # === IMPORTS ===
 
+import base64
+import re
 from dataclasses import dataclass
 from datetime import datetime, time
 from email.header import decode_header
@@ -52,6 +54,21 @@ SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 # not promotions buried in other tabs. A sane cap keeps the request small.
 MAILBOX_USER = "me"
 MAX_MESSAGES = 100
+
+# --- Reply drafting ---
+# The draft assistant (draft_assistant.py) reuses the SAME read-only access and
+# the SAME importance filter below; the only difference is that, for the few
+# emails the filter already approves, it also reads that one message's body so a
+# relevant reply can be drafted. Reading bodies is still squarely within the
+# gmail.readonly scope — nothing here can ever send, delete, or modify mail.
+
+# Never draft for more than this many emails in one pass — bounds both the work
+# and (since each becomes exactly one cheap API call downstream) the cost.
+MAX_REPLY_DRAFTS = 10
+
+# Cap the body text we hand to the drafting model, so one very long email can't
+# inflate token cost. A few thousand characters is plenty of context for a reply.
+BODY_CHAR_LIMIT = 4000
 
 # --- Importance filtering ---
 # The brief should surface only mail from a person where a reply is plausibly
@@ -104,6 +121,22 @@ class ImportantEmail:
     """
     sender: str
     subject: str
+
+
+@dataclass(frozen=True)
+class ReplyableEmail:
+    """An important email plus the bits needed to draft and address a reply.
+
+    Carries the same `sender_name`/`subject` an `ImportantEmail` would, plus the
+    sender's `sender_email` (so a reply can be addressed back to them) and the
+    message `body` (capped at BODY_CHAR_LIMIT) the model reads to draft a
+    relevant response. Only produced for emails the importance filter already
+    approved — never for the skipped noise. Stays local; never written or logged.
+    """
+    sender_name: str
+    sender_email: str
+    subject: str
+    body: str
 
 
 # === AUTHENTICATION ===
@@ -255,6 +288,84 @@ def fetch_important_today() -> list[ImportantEmail]:
         ) from error
 
 
+def fetch_important_for_reply(max_emails: int = MAX_REPLY_DRAFTS) -> list[ReplyableEmail]:
+    """Return today's reply-worthy emails, each with the body needed to draft one.
+
+    Reuses the exact same listing and importance filter as `fetch_important_today`
+    (`_is_important` — newsletters, automated senders, promotions/social,
+    forwards, and rejections all skipped). The only addition: for each email the
+    filter approves, it then reads that one message's body (capped at
+    BODY_CHAR_LIMIT) and the sender's address, so a relevant reply can be drafted
+    and addressed back. To honor least-access, noise is judged from cheap
+    metadata FIRST and only the approved emails ever have their body downloaded.
+    At most `max_emails` are returned (newest first), bounding the work and cost.
+
+    Raises GmailSyncError with a friendly message if Gmail can't be reached, the
+    sign-in is missing/expired, or the API returns an error.
+    """
+    credentials = _load_credentials()
+    query = (
+        f"is:unread in:inbox after:{_local_midnight_epoch()} "
+        "-category:promotions -category:social"
+    )
+
+    try:
+        service = build("gmail", "v1", credentials=credentials, cache_discovery=False)
+        listing = (
+            service.users()
+            .messages()
+            .list(userId=MAILBOX_USER, q=query, maxResults=MAX_MESSAGES)
+            .execute()
+        )
+        replyable: list[ReplyableEmail] = []
+        for stub in listing.get("messages", []):
+            if len(replyable) >= max_emails:
+                break
+            # Cheap metadata pass first: decide importance WITHOUT downloading the
+            # body, so the noise we skip never has its contents read.
+            metadata = (
+                service.users()
+                .messages()
+                .get(
+                    userId=MAILBOX_USER,
+                    id=stub["id"],
+                    format="metadata",
+                    metadataHeaders=METADATA_HEADERS,
+                )
+                .execute()
+            )
+            headers = _headers_to_dict(metadata)
+            if not _is_important(headers, metadata.get("labelIds", [])):
+                continue
+
+            # Approved: now (and only now) read the full message for its body.
+            full = (
+                service.users()
+                .messages()
+                .get(userId=MAILBOX_USER, id=stub["id"], format="full")
+                .execute()
+            )
+            from_header = _headers_to_dict(full).get("from", "")
+            _, sender_email = parseaddr(_decode_header(from_header))
+            replyable.append(
+                ReplyableEmail(
+                    sender_name=_sender_name(from_header),
+                    sender_email=sender_email,
+                    subject=_decode_header(headers.get("subject", "")) or "(no subject)",
+                    body=_extract_body(full.get("payload", {})),
+                )
+            )
+        return replyable
+    except HttpError as error:
+        raise GmailSyncError(
+            f"Gmail returned an error (HTTP {error.resp.status})."
+        ) from error
+    except (GoogleAuthError, OSError) as error:
+        raise GmailSyncError(
+            "Couldn't reach Gmail. Check your internet connection and try again."
+        ) from error
+
+
 # === IMPORTANCE FILTERING ===
 
 def _is_important(headers: dict[str, str], label_ids: list[str]) -> bool:
@@ -286,6 +397,52 @@ def _headers_to_dict(message: dict) -> dict[str, str]:
     """Flatten a message's header list into a lower-cased name → value map."""
     headers = message.get("payload", {}).get("headers", [])
     return {item["name"].lower(): item["value"] for item in headers}
+
+
+def _extract_body(payload: dict) -> str:
+    """Return readable plain text from a message payload, capped and tidied.
+
+    Prefers the email's text/plain part; if it's HTML-only, falls back to the
+    text/html part with tags crudely stripped. The result is whitespace-collapsed
+    and truncated to BODY_CHAR_LIMIT so a long thread can't inflate token cost.
+    Returns "" when no text part is found (the caller drafts from subject alone).
+    """
+    text = _collect_part_text(payload, "text/plain")
+    if not text:
+        html = _collect_part_text(payload, "text/html")
+        text = re.sub(r"<[^>]+>", " ", html) if html else ""
+    # Collapse runs of whitespace/blank lines into single spaces/newlines so the
+    # drafting prompt stays compact and readable.
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n\s*\n+", "\n\n", text).strip()
+    return text[:BODY_CHAR_LIMIT]
+
+
+def _collect_part_text(part: dict, mime_type: str) -> str:
+    """Find the first body part of the given MIME type, walking nested parts.
+
+    Gmail nests multipart emails (e.g. multipart/alternative holding both a
+    text/plain and a text/html copy), so this recurses to locate the wanted type
+    and decodes its URL-safe base64 data to text.
+    """
+    if part.get("mimeType") == mime_type:
+        data = part.get("body", {}).get("data")
+        if data:
+            return _decode_base64url(data)
+    for sub_part in part.get("parts", []) or []:
+        found = _collect_part_text(sub_part, mime_type)
+        if found:
+            return found
+    return ""
+
+
+def _decode_base64url(data: str) -> str:
+    """Decode Gmail's URL-safe base64 body data to text, tolerating bad bytes."""
+    padded = data + "=" * (-len(data) % 4)  # Gmail omits base64 padding
+    try:
+        return base64.urlsafe_b64decode(padded).decode("utf-8", errors="replace")
+    except (ValueError, TypeError):
+        return ""
 
 
 def _sender_name(from_header: str) -> str:

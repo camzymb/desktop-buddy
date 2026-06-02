@@ -43,6 +43,8 @@ from calendar_sync import CalendarEvent, due_reminders, fetch_todays_events
 from callout_panel import CalloutPanel
 from callout_server import HOST, PORT, create_server
 from content_planner import build_weekly_plan, load_plan_payload, write_plan
+from draft_assistant import DraftBatch, draft_replies
+from draft_panel import DraftPanel
 from morning_brief import gather_brief, mock_brief
 from notion_sync import page_url, publish_plan
 from plan_panel import PlanPanel
@@ -228,6 +230,35 @@ PLAN_WEEK_DELAY_MS = 3500
 # call), a moment after she's settled so it doesn't pop in before she appears.
 PLAN_PANEL_SHOW_DELAY_MS = 1800
 
+# --- Email draft assistant ---
+
+# Pressing "D" asks her to read today's IMPORTANT emails (read-only — reusing the
+# morning brief's Gmail access and its exact importance filter) and draft a warm,
+# professional reply for each: exactly one cheap Haiku call per email. The drafts
+# appear in a panel, each with an "Open in Gmail" button that opens a prefilled
+# compose window in the browser. She NEVER sends — Camille reviews and sends each
+# herself. Two launch flags help test it: --draft-now forces the real (paid) path
+# at launch, and --draft-mock uses free SAMPLE emails/drafts with NO API call and
+# NO Gmail access — the way to test the panel and the wording at zero cost. (The
+# "D" key always uses the real path.)
+DRAFT_NOW_FLAG = "--draft-now"
+DRAFT_MOCK_FLAG = "--draft-mock"
+
+# Fire the launch-flag draft once, a beat after she's settled (mirrors the others).
+DRAFT_DELAY_MS = 3500
+
+# She gives a gentle heads-up while drafting, then speaks up when the panel's up.
+DRAFT_WORKING_MESSAGE = "Reading your inbox and drafting some replies… 🌸"
+DRAFT_READY_MESSAGE_ONE = (
+    "I drafted 1 reply for you 🌸 — open the panel to review and send it yourself."
+)
+DRAFT_READY_MESSAGE_MANY = (
+    "I drafted {count} replies for you 🌸 — open the panel to review and send "
+    "each one yourself."
+)
+DRAFT_FAILED_MESSAGE = "I hit a snag drafting your replies — mind trying again? 🤍"
+DRAFT_OPEN_FAILED_MESSAGE = "I couldn't open Gmail just now — sorry! 🤍"
+
 # --- Single instance ---
 
 # A per-user lock so only one buddy ever runs at a time (e.g. if autostart and
@@ -320,6 +351,10 @@ class BuddyOverlay(QWidget):
     # text (empty if gathering fell over) for safe display on the GUI thread.
     brief_ready = pyqtSignal(str)
 
+    # Emitted from the background draft thread; carries the DraftBatch (drafts +
+    # friendly status) for safe display on the GUI thread.
+    draft_ready = pyqtSignal(object)
+
     # --- setup ---
 
     def __init__(
@@ -330,6 +365,8 @@ class BuddyOverlay(QWidget):
         plan_week_mock: bool = False,
         brief_now: bool = False,
         brief_mock: bool = False,
+        draft_now: bool = False,
+        draft_mock: bool = False,
     ) -> None:
         super().__init__()
         self._simulate_reminder_on_start = simulate_reminder
@@ -337,6 +374,8 @@ class BuddyOverlay(QWidget):
         self._plan_week_mock = plan_week_mock
         self._brief_now_on_start = brief_now
         self._brief_mock_on_start = brief_mock
+        self._draft_now_on_start = draft_now
+        self._draft_mock_on_start = draft_mock
         self._configure_window()
 
         # Preload every sprite already scaled to BUDDY_HEIGHT_PX tall.
@@ -355,6 +394,8 @@ class BuddyOverlay(QWidget):
         self._callout_panel.set_note(PANEL_NOTE)
         # Compact weekly-plan overview card; links to the full plan in Notion.
         self._plan_panel = PlanPanel(self, self._update_input_mask, self._open_notion)
+        # Draft-replies card; each draft's button opens a prefilled Gmail compose.
+        self._draft_panel = DraftPanel(self, self._update_input_mask, self._open_draft)
         self._sound_player = SoundPlayer(SOUNDS_DIR)
 
         # Walk state. Position is initialized later in showEvent() once the
@@ -431,6 +472,7 @@ class BuddyOverlay(QWidget):
         self.reminder_events_loaded.connect(self._on_reminder_events_loaded)
         self.plan_ready.connect(self._on_plan_ready)
         self.brief_ready.connect(self._on_brief_ready)
+        self.draft_ready.connect(self._on_draft_ready)
 
         self._reminder_check_timer = QTimer(self)
         self._reminder_check_timer.setInterval(REMINDER_CHECK_INTERVAL_MS)
@@ -553,6 +595,15 @@ class BuddyOverlay(QWidget):
         else:
             QTimer.singleShot(PLAN_PANEL_SHOW_DELAY_MS, self._show_saved_plan_panel)
 
+        # Draft-replies test flags: with --draft-mock she drafts from free sample
+        # data (no API, no Gmail); with --draft-now she runs the real (paid) path.
+        # Without a flag, drafting only ever happens when Camille presses "D".
+        if self._draft_now_on_start or self._draft_mock_on_start:
+            QTimer.singleShot(
+                DRAFT_DELAY_MS,
+                lambda: self._start_drafts(use_mock=self._draft_mock_on_start),
+            )
+
         # Start watching the calendar for upcoming events: fetch today's now,
         # then keep it fresh and check the clock on their own gentle timers.
         self._refresh_reminder_events()
@@ -628,6 +679,8 @@ class BuddyOverlay(QWidget):
             region = region.united(QRegion(self._callout_panel.geometry()))
         if self._plan_panel.isVisible():
             region = region.united(QRegion(self._plan_panel.geometry()))
+        if self._draft_panel.isVisible():
+            region = region.united(QRegion(self._draft_panel.geometry()))
         self.setMask(region)
 
     # --- dragging the buddy ---
@@ -1124,6 +1177,76 @@ class BuddyOverlay(QWidget):
         if not opened:
             self._begin_talking(PLAN_NOTION_OPEN_FAILED_MESSAGE, play_voice=False)
 
+    # --- email draft assistant ---
+
+    def _start_drafts(self, use_mock: bool = False) -> None:
+        """Give a gentle heads-up and draft replies in the background.
+
+        The "D" key calls this with the real path (use_mock=False); the
+        --draft-mock launch flag passes use_mock=True for a free, no-API/no-Gmail
+        preview. Either way the work runs off the GUI thread so she keeps strolling
+        while the inbox is read and the (one-per-email) drafts are written.
+        """
+        self._begin_talking(DRAFT_WORKING_MESSAGE, play_voice=False)
+        threading.Thread(
+            target=self._draft_worker, args=(use_mock,), name="draft-replies", daemon=True
+        ).start()
+
+    def _draft_worker(self, use_mock: bool) -> None:
+        """Draft replies off the GUI thread and hand the batch back via a signal.
+
+        draft_replies already turns every expected problem (missing key, offline,
+        a draft call that fails) into a friendly message or a skipped email rather
+        than raising, so there's always something kind to show. We still guard the
+        unexpected here so a bad inbox can never take the buddy down.
+        """
+        try:
+            batch = draft_replies(use_mock=use_mock)
+        except Exception:  # noqa: BLE001 — a background nicety must never crash the app
+            batch = DraftBatch(drafts=[], message=DRAFT_FAILED_MESSAGE)
+        self.draft_ready.emit(batch)
+
+    def _on_draft_ready(self, batch: DraftBatch) -> None:
+        """Show the drafts in the panel and give a gentle spoken update (GUI thread).
+
+        When there are drafts, the panel is filled and shown and she says how many
+        are ready. Otherwise (nothing to reply to, missing key, offline) she simply
+        speaks the friendly note the batch carries — no empty card pops up.
+        """
+        if batch.drafts:
+            rows = [
+                (draft.sender_name, draft.subject, draft.draft_body, draft.gmail_url)
+                for draft in batch.drafts
+            ]
+            self._draft_panel.set_drafts(rows)
+            if self._draft_panel.is_open:
+                self._draft_panel.raise_()
+                self._update_input_mask()
+            else:
+                self._draft_panel.show_panel()
+            count = len(batch.drafts)
+            message = (
+                DRAFT_READY_MESSAGE_ONE
+                if count == 1
+                else DRAFT_READY_MESSAGE_MANY.format(count=count)
+            )
+            self._begin_talking(message, play_voice=False)
+        else:
+            self._begin_talking(batch.message or DRAFT_FAILED_MESSAGE, play_voice=False)
+
+    def _open_draft(self, url: str) -> None:
+        """Open a prefilled Gmail compose window for one draft (the panel's button).
+
+        She only ever OPENS a compose window — Camille reviews and sends it
+        herself. A friendly message stands in if no browser can be opened.
+        """
+        try:
+            opened = webbrowser.open(url)
+        except OSError:
+            opened = False
+        if not opened:
+            self._begin_talking(DRAFT_OPEN_FAILED_MESSAGE, play_voice=False)
+
     # --- event reminders ---
 
     def _refresh_reminder_events(self) -> None:
@@ -1200,16 +1323,17 @@ class BuddyOverlay(QWidget):
     # --- input ---
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
-        """Handle keys: Escape closes; Space talks; C opens the browser summary; P pops the panel; G replays the greeting; B re-shows today's brief; R previews a reminder; W minimizes the plan panel.
+        """Handle keys: Escape closes; Space talks; C opens the browser summary; P pops the panel; G replays the greeting; B re-shows today's brief; D drafts email replies; R previews a reminder; W minimizes the plan panel.
 
         All require the overlay to hold keyboard focus — clicking the buddy
         gives it focus. Spacebar triggers the same talk as the timer; "C" opens
         the callout in the default browser; "P" toggles the daily-summary panel;
         "G" replays the startup greeting + panel; "B" re-shows today's morning
         brief on demand (re-fetching live weather, without affecting tomorrow's
-        automatic one); "R" previews an event reminder (bubble + post-it) without
-        waiting for a real calendar event; "W" minimizes/maximizes the
-        weekly-plan panel.
+        automatic one); "D" reads today's important emails (read-only) and drafts
+        a reply for each to review and send herself; "R" previews an event
+        reminder (bubble + post-it) without waiting for a real calendar event;
+        "W" minimizes/maximizes the weekly-plan panel.
         """
         if event.key() == Qt.Key.Key_Escape:
             self.close()
@@ -1223,6 +1347,8 @@ class BuddyOverlay(QWidget):
             self._run_startup_greeting()
         elif event.key() == Qt.Key.Key_B:
             self._run_morning_brief()
+        elif event.key() == Qt.Key.Key_D:
+            self._start_drafts()
         elif event.key() == Qt.Key.Key_R:
             self._simulate_reminder()
         elif event.key() == Qt.Key.Key_W:
@@ -1302,6 +1428,8 @@ def main() -> int:
         plan_week_mock=PLAN_MOCK_FLAG in sys.argv,
         brief_now=BRIEF_NOW_FLAG in sys.argv,
         brief_mock=BRIEF_MOCK_FLAG in sys.argv,
+        draft_now=DRAFT_NOW_FLAG in sys.argv,
+        draft_mock=DRAFT_MOCK_FLAG in sys.argv,
     )
     overlay.showMaximized()
     try:

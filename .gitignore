@@ -43,6 +43,7 @@ Thumbs.db
 # machine-specific, never shared
 panel_state.json
 plan_panel_state.json
+draft_panel_state.json
 brief_state.json
 
 # Generated weekly content plan — your own content ideas, kept local (the full
