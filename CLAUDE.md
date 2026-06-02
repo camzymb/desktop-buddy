@@ -25,6 +25,9 @@ Claude API for dynamic messages and further context-aware reminders.
   `tuple[float, float]`).
 - **Descriptive names** — no single-letter identifiers except trivial loop counters.
 - **No leftover debug prints** — gate diagnostics behind a `DEBUG` flag or remove them.
+- **Log via the `logging` module, not `print`** — each module uses
+  `logging.getLogger(__name__)`; gate noisy diagnostics at DEBUG and keep a healthy run quiet
+  (setup is described under Project Structure; standalone CLI blocks may still `print`).
 - **Comments explain *why*, not *what*** — reserve them for non-obvious decisions.
 - Favor readability: one well-organized module over premature abstraction; split a file into
   focused modules once it grows unwieldy.
@@ -44,7 +47,8 @@ This is a public repository. Source code is public; private data never is.
   `calendar.readonly`).
 - **Keep personal data local** — fetched data is shown only to the user (e.g. served on
   localhost) and is never written into the repo or exposed on the network.
-- **Never log full secrets** to the console.
+- **Never log secrets or personal data** — record only error types, counts, and filenames, never
+  tokens, keys, or fetched content (email/calendar). The log is gitignored, but keep it minimal too.
 
 ## Project Structure
 
@@ -54,6 +58,10 @@ This is a public repository. Source code is public; private data never is.
 - **Assets:** sprites in `sprites/`, sounds in `sounds/`, bundled fonts in `assets/fonts/`
   (with their licenses).
 - **Daily-summary UI:** `callout_panel.py` — a PyQt panel that pops out of the buddy.
+- **Logging:** `logging_config.setup_logging()` (called once at startup) configures a rotating,
+  gitignored `desktop_buddy.log` in the project root; the console stays quiet (warnings/errors only)
+  by default, `BUDDY_LOG_LEVEL=DEBUG` turns on verbose tracing, and noisy third-party loggers are
+  muted so DEBUG never dumps request URLs/IDs.
 - **Secrets (gitignored):** `credentials.json`, `token.json`, `.env`.
 - **Environment:** a project-local virtualenv (`.venv/`); dependencies pinned in
   `requirements.txt`.
