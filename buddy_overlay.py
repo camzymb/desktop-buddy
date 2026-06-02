@@ -18,6 +18,7 @@ just the overlay widget and everything she does on screen.
 # === IMPORTS ===
 
 import json
+import logging
 import math
 import random
 import threading
@@ -50,6 +51,8 @@ from notion_sync import page_url, publish_plan
 from plan_panel import PlanPanel
 from quotes import MOTIVATIONAL_QUOTES
 from speech_bubble import SpeechBubble
+
+logger = logging.getLogger(__name__)
 
 
 # === BUDDY OVERLAY ===
@@ -733,7 +736,11 @@ class BuddyOverlay(QWidget):
         try:
             saved = json.loads(BRIEF_STATE_PATH.read_text(encoding="utf-8"))
             already_today = saved.get("last_brief_date") == today
-        except (OSError, ValueError):
+        except (OSError, ValueError) as error:
+            logger.debug(
+                "Brief state unreadable; treating as not done yet (%s)",
+                type(error).__name__,
+            )
             already_today = False
         if already_today:
             return False
@@ -741,8 +748,12 @@ class BuddyOverlay(QWidget):
             BRIEF_STATE_PATH.write_text(
                 json.dumps({"last_brief_date": today}), encoding="utf-8"
             )
-        except OSError:
-            pass
+        except OSError as error:
+            logger.warning(
+                "Could not write brief state %s (%s)",
+                BRIEF_STATE_PATH.name,
+                type(error).__name__,
+            )
         return True
 
     def _run_morning_brief(self) -> None:
@@ -783,6 +794,7 @@ class BuddyOverlay(QWidget):
         try:
             brief = mock_brief() if self._brief_mock_on_start else gather_brief()
         except Exception:  # noqa: BLE001 — a startup nicety must never crash the app
+            logger.exception("Morning brief failed unexpectedly")
             brief = ""
         self.brief_ready.emit(brief)
 
@@ -796,6 +808,7 @@ class BuddyOverlay(QWidget):
         normal talk cycle resumes afterwards via _on_bubble_hidden().
         """
         if brief:
+            logger.info("Morning brief delivered.")
             self._begin_talking(brief, voice=BRIEF_VOICE_FILENAME)
 
     # --- weekly content planner ---
@@ -820,6 +833,7 @@ class BuddyOverlay(QWidget):
         try:
             plan = build_weekly_plan(use_mock=self._plan_week_mock)
         except Exception:  # noqa: BLE001 — a background nicety must never crash the app
+            logger.exception("Weekly plan generation crashed unexpectedly")
             plan = {"error": PLAN_FAILED_MESSAGE}
         write_plan(plan)
 
@@ -901,7 +915,8 @@ class BuddyOverlay(QWidget):
             return
         try:
             opened = webbrowser.open(url)
-        except OSError:
+        except OSError as error:
+            logger.warning("Could not open Notion in a browser (%s)", type(error).__name__)
             opened = False
         if not opened:
             self._begin_talking(PLAN_NOTION_OPEN_FAILED_MESSAGE, play_voice=False)
@@ -932,6 +947,7 @@ class BuddyOverlay(QWidget):
         try:
             batch = draft_replies(use_mock=use_mock)
         except Exception:  # noqa: BLE001 — a background nicety must never crash the app
+            logger.exception("Draft generation crashed unexpectedly")
             batch = DraftBatch(drafts=[], message=DRAFT_FAILED_MESSAGE)
         self.draft_ready.emit(batch)
 
@@ -971,7 +987,8 @@ class BuddyOverlay(QWidget):
         """
         try:
             opened = webbrowser.open(url)
-        except OSError:
+        except OSError as error:
+            logger.warning("Could not open Gmail compose in a browser (%s)", type(error).__name__)
             opened = False
         if not opened:
             self._begin_talking(DRAFT_OPEN_FAILED_MESSAGE, play_voice=False)
@@ -990,14 +1007,19 @@ class BuddyOverlay(QWidget):
         """Fetch today's events off the GUI thread and hand them back via signal.
 
         Reminders are a quiet background nicety, so any calendar problem
-        (offline, missing/expired sign-in) is swallowed: she simply keeps the
-        events she already had and tries again on the next refresh, never
-        interrupting with an error. Event data is only passed back for in-memory
-        scheduling — never written or logged.
+        (offline, missing/expired sign-in) is swallowed on screen: she simply
+        keeps the events she already had and tries again on the next refresh,
+        never interrupting with an error. The failure IS logged (the event data
+        is never logged, only the failure), so a quiet problem like an expired
+        sign-in is diagnosable instead of looking like "nothing to show".
         """
         try:
             events = fetch_todays_events()
-        except Exception:  # noqa: BLE001 — a background nicety must never crash the app
+        except Exception as error:  # noqa: BLE001 — a background nicety must never crash the app
+            logger.warning(
+                "Reminder calendar refresh failed (%s); keeping last events.",
+                type(error).__name__,
+            )
             return
         self.reminder_events_loaded.emit(events)
 

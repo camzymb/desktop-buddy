@@ -31,6 +31,7 @@ system-font fallback is used if the bundled file is ever missing.
 # === IMPORTS ===
 
 import json
+import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -69,6 +70,8 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import QGraphicsOpacityEffect, QHBoxLayout, QPushButton, QWidget
 
 from calendar_sync import CalendarEvent, CalendarSyncError, fetch_todays_events
+
+logger = logging.getLogger(__name__)
 
 
 # === CONSTANTS ===
@@ -469,7 +472,8 @@ class CalloutPanel(QWidget):
 
         Any failure is reported as a friendly message rather than crashing the
         thread, so the panel always shows something sensible. Event data is only
-        passed back for in-memory painting — never written or logged.
+        passed back for in-memory painting; the data is never logged, only the
+        failure is.
         """
         try:
             events = fetch_todays_events()
@@ -477,6 +481,7 @@ class CalloutPanel(QWidget):
         except CalendarSyncError as error:
             self.events_loaded.emit([], str(error))
         except Exception:  # noqa: BLE001 — keep the UI robust to any I/O failure
+            logger.exception("Panel event fetch failed unexpectedly")
             self.events_loaded.emit([], "Couldn't load your events right now.")
 
     def _on_events_loaded(self, events: list[CalendarEvent], error: str) -> None:
@@ -851,7 +856,8 @@ class CalloutPanel(QWidget):
         """
         try:
             data = json.loads(PANEL_STATE_PATH.read_text())
-        except (OSError, ValueError):
+        except (OSError, ValueError) as error:
+            logger.debug("No saved panel state (%s)", type(error).__name__)
             return None, None
         try:
             point = QPoint(int(data["x"]), int(data["y"]))
@@ -876,8 +882,10 @@ class CalloutPanel(QWidget):
             PANEL_STATE_PATH.write_text(
                 json.dumps({"x": rect.x(), "y": rect.y(), "w": rect.width(), "h": rect.height()})
             )
-        except OSError:
-            pass
+        except OSError as error:
+            logger.warning(
+                "Could not save panel state %s (%s)", PANEL_STATE_PATH.name, type(error).__name__
+            )
 
     # --- layout ---
 

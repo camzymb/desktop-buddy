@@ -33,6 +33,7 @@ assets/fonts/ (see assets/fonts/OFL.txt); a system fallback is used if missing.
 # === IMPORTS ===
 
 import json
+import logging
 from collections.abc import Callable
 from pathlib import Path
 
@@ -52,6 +53,8 @@ from PyQt6.QtWidgets import (
 # The bundled-font location and fallback list are owned by callout_panel; reuse
 # them here so there is a single source of truth for the buddy's font.
 from callout_panel import FONT_PATH, PANEL_FONT_FALLBACK_FAMILIES
+
+logger = logging.getLogger(__name__)
 
 
 # === CONSTANTS ===
@@ -607,7 +610,8 @@ class CardPanel(QWidget):
         """
         try:
             data = json.loads(self._state_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except (OSError, ValueError) as error:
+            logger.debug("No saved card state (%s)", type(error).__name__)
             return None, None
         try:
             point = QPoint(int(data["x"]), int(data["y"]))
@@ -642,5 +646,7 @@ class CardPanel(QWidget):
             data["restore_h"] = self._restore_size.height()
         try:
             self._state_path.write_text(json.dumps(data), encoding="utf-8")
-        except OSError:
-            pass
+        except OSError as error:
+            logger.warning(
+                "Could not save card state %s (%s)", self._state_path.name, type(error).__name__
+            )

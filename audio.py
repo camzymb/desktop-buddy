@@ -9,10 +9,13 @@ talk visually without crashing.
 
 # === IMPORTS ===
 
+import logging
 import random
 from pathlib import Path
 
 import pygame
+
+logger = logging.getLogger(__name__)
 
 
 # === CONSTANTS ===
@@ -49,7 +52,8 @@ class SoundPlayer:
         try:
             pygame.mixer.init()
             return True
-        except pygame.error:
+        except pygame.error as error:
+            logger.warning("Audio unavailable; running without sound (%s)", error)
             return False
 
     def play_pop(self) -> float:

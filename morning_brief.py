@@ -24,12 +24,15 @@ Test the wording for free, with fake data and no network or Gmail calls:
 # === IMPORTS ===
 
 import argparse
+import logging
 import os
 
 import calendar_sync
 import gmail_sync
 import weather
 from content_planner import load_env_file
+
+logger = logging.getLogger(__name__)
 
 # === CONSTANTS ===
 
@@ -168,6 +171,7 @@ def _safe_events() -> list[calendar_sync.CalendarEvent] | None:
     try:
         return calendar_sync.fetch_todays_events()
     except calendar_sync.CalendarSyncError:
+        logger.debug("Brief: calendar unavailable, skipping that line.")
         return None
 
 
@@ -176,6 +180,7 @@ def _safe_important_email() -> list[gmail_sync.ImportantEmail] | None:
     try:
         return gmail_sync.fetch_important_today()
     except gmail_sync.GmailSyncError:
+        logger.debug("Brief: Gmail unavailable, skipping that line.")
         return None
 
 

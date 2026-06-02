@@ -49,6 +49,23 @@ LEVEL_ENV_VAR = "BUDDY_LOG_LEVEL"
 LOG_FORMAT = "%(asctime)s  %(levelname)-7s  %(name)s: %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
+# Third-party libraries that log very verbosely at DEBUG/INFO — and whose lines
+# can include request URLs or message IDs. Pin them to WARNING so our own
+# BUDDY_LOG_LEVEL=DEBUG never drags in their noise (or their request details);
+# only their genuine warnings/errors get through.
+NOISY_LIBRARY_LOGGERS = (
+    "googleapiclient",
+    "google",
+    "google_auth_httplib2",
+    "urllib3",
+    "httpx",
+    "httpcore",
+    "anthropic",
+    "notion_client",
+    "asyncio",
+    "PIL",
+)
+
 
 # === SETUP ===
 
@@ -97,6 +114,11 @@ def setup_logging() -> None:
     file_handler.setLevel(file_level)
     file_handler.setFormatter(formatter)
     root.addHandler(file_handler)
+
+    # Keep chatty dependencies from flooding the log (or leaking request URLs/IDs)
+    # even when we turn our own level up to DEBUG.
+    for noisy in NOISY_LIBRARY_LOGGERS:
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
 def _resolve_override_level() -> int | None:
