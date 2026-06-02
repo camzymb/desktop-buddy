@@ -553,12 +553,18 @@ class BuddyOverlay(QWidget):
         self._reposition_sprite()
 
     def _reposition_sprite(self) -> None:
-        """Move the sprite label to the current feet coordinate and refresh the input mask."""
+        """Move the sprite label to the current feet coordinate and refresh the input mask.
+
+        While a speech bubble is showing, re-anchor it to her too, so it follows
+        in real time as she walks or is dragged (not just when it first appears).
+        """
         sprite_width = self._sprite_label.width()
         sprite_height = self._sprite_label.height()
         left_x = int(self._feet_x - sprite_width / 2)
         top_y = int(self._feet_y - sprite_height)
         self._sprite_label.move(left_x, top_y)
+        if self._speech_bubble.isVisible():
+            self._position_bubble()
         self._update_input_mask()
 
     def _update_input_mask(self) -> None:
@@ -584,16 +590,17 @@ class BuddyOverlay(QWidget):
     def mousePressEvent(self, event: QMouseEvent) -> None:
         """Arm a possible pick-up when she's pressed (the cards handle their own clicks).
 
-        Only a left-press landing on her sprite, while she's idle or walking,
-        arms a drag — not while she's mid-speech, so a bubble is never cut off.
-        Nothing moves yet: a bare click (no drag) leaves her walking undisturbed.
+        A left-press landing on her sprite arms a drag whether she's idle,
+        walking, or mid-speech — when she's talking the bubble simply comes
+        along (see mouseMoveEvent). Nothing moves yet: a bare click (no drag)
+        leaves her undisturbed.
         """
         point = event.position().toPoint()
         on_buddy = self._sprite_label.geometry().contains(point)
         if (
             event.button() == Qt.MouseButton.LeftButton
             and on_buddy
-            and self._state in (State.IDLE, State.WALKING)
+            and self._state in (State.IDLE, State.WALKING, State.TALKING)
         ):
             self._drag_armed = True
             self._dragging_buddy = False
@@ -614,27 +621,42 @@ class BuddyOverlay(QWidget):
             moved = abs(point.x() - self._drag_press_x) + abs(point.y() - self._drag_press_y)
             if moved < BUDDY_DRAG_THRESHOLD_PX:
                 return
-            # Crossed the threshold: pick her up. Pause her walk/rest cycle and
-            # show the idle pose so she reads as "held" rather than mid-stride.
+            # Crossed the threshold: pick her up.
             self._dragging_buddy = True
-            self._move_timer.stop()
             self._idle_timer.stop()
-            self._state = State.IDLE
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
-            self._show_sprite(IDLE_SPRITE)
+            if self._state == State.TALKING:
+                # Picked up mid-sentence: keep the bubble showing and pause its
+                # countdown so the talk doesn't fade out while she's being moved;
+                # it resumes when she's dropped (see mouseReleaseEvent).
+                self._bubble_hold_timer.stop()
+            else:
+                # Picked up while walking/resting: pause the wander and show the
+                # idle pose so she reads as "held" rather than mid-stride.
+                self._move_timer.stop()
+                self._state = State.IDLE
+                self._show_sprite(IDLE_SPRITE)
         self._feet_x = self._clamp_feet_x(point.x() + self._drag_grab_dx)
         self._feet_y = self._clamp_feet_y(point.y() + self._drag_grab_dy)
         self._reposition_sprite()
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        """Drop her where released and resume her normal wander from that spot."""
+        """Drop her where released and resume from that spot.
+
+        If she was mid-speech when picked up, restart the bubble's hold so she
+        finishes her sentence from the new spot; otherwise settle into a rest
+        and pick up her normal wander again.
+        """
         if self._drag_armed:
             was_dragging = self._dragging_buddy
             self._drag_armed = False
             self._dragging_buddy = False
             if was_dragging:
                 self.unsetCursor()
-                self._begin_resting()  # settle at the new spot, then wander again
+                if self._state == State.TALKING:
+                    self._bubble_hold_timer.start(BUBBLE_HOLD_MS)
+                else:
+                    self._begin_resting()  # settle, then wander again
             return
         super().mouseReleaseEvent(event)
 
@@ -743,17 +765,33 @@ class BuddyOverlay(QWidget):
             self._sound_player.play_voice(self._pending_voice)
 
     def _position_bubble(self) -> None:
-        """Center the speech bubble just above the buddy's head, kept on-screen."""
+        """Anchor the speech bubble to the buddy's CURRENT head position, on-screen.
+
+        Centred just above her head by default. Anchoring to her live feet/head
+        position (not the fixed ground line) is what lets the bubble follow her
+        as she walks or is dragged anywhere on screen. Two edge cases keep it
+        fully visible: near the left/right edge it's nudged inward, and near the
+        top — with no room above her — it flips to sit just below her with the
+        tail pointing up at her instead of being clipped.
+        """
         bubble_width = self._speech_bubble.width()
         bubble_height = self._speech_bubble.height()
-        sprite_top_y = self._ground_y - self._sprite_label.height()
+        sprite_top_y = self._feet_y - self._sprite_label.height()
 
+        # Horizontal: centre on her, then nudge fully on-screen.
         left_x = int(self._feet_x - bubble_width / 2)
         max_left_x = self.width() - EDGE_MARGIN_PX - bubble_width
         left_x = max(EDGE_MARGIN_PX, min(left_x, max_left_x))
 
-        top_y = sprite_top_y - bubble_height - BUBBLE_GAP_ABOVE_HEAD_PX
-        top_y = max(EDGE_MARGIN_PX, top_y)
+        # Vertical: prefer just above her head; flip below if it wouldn't fit.
+        above_top_y = int(sprite_top_y - bubble_height - BUBBLE_GAP_ABOVE_HEAD_PX)
+        if above_top_y >= EDGE_MARGIN_PX:
+            self._speech_bubble.set_tail_pointing_up(False)
+            top_y = above_top_y
+        else:
+            self._speech_bubble.set_tail_pointing_up(True)
+            max_top_y = self.height() - EDGE_MARGIN_PX - bubble_height
+            top_y = min(int(self._feet_y + BUBBLE_GAP_ABOVE_HEAD_PX), max_top_y)
 
         self._speech_bubble.move(left_x, top_y)
 

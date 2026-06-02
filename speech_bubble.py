@@ -117,6 +117,9 @@ class SpeechBubble(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
         self._text: str = ""
+        # The tail normally points down (bubble above her head); it flips to
+        # point up when the bubble has to sit below her, e.g. near the top edge.
+        self._tail_on_top: bool = False
         self._font = _bubble_font()
 
         # An opacity effect drives the fade animations.
@@ -137,6 +140,17 @@ class SpeechBubble(QWidget):
         self._text = text
         self._resize_to_text()
         self.update()
+
+    def set_tail_pointing_up(self, pointing_up: bool) -> None:
+        """Point the tail up (bubble below her head) or down (bubble above it).
+
+        Lets the caller flip the tail when there's no room above her — e.g. when
+        she's been dragged near the top edge — so it always points toward her.
+        Only repaints when the direction actually changes.
+        """
+        if pointing_up != self._tail_on_top:
+            self._tail_on_top = pointing_up
+            self.update()
 
     def fade_in(self) -> None:
         """Gently fade the bubble into view."""
@@ -185,21 +199,30 @@ class SpeechBubble(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         body_height = self.height() - BUBBLE_TAIL_HEIGHT_PX
-        body_rect = QRectF(0, 0, self.width(), body_height)
+        # The body sits below the tail when the tail points up, otherwise at the
+        # top with the tail hanging beneath it.
+        body_top = BUBBLE_TAIL_HEIGHT_PX if self._tail_on_top else 0
+        body_rect = QRectF(0, body_top, self.width(), body_height)
 
         bubble_path = QPainterPath()
         bubble_path.addRoundedRect(
             body_rect, BUBBLE_CORNER_RADIUS_PX, BUBBLE_CORNER_RADIUS_PX
         )
 
-        # A narrow triangle tail centred along the bottom edge, merged into the
-        # body. Centred so it always points straight down at her head.
+        # A narrow triangle tail centred horizontally and merged into the body,
+        # pointing up at her head when flipped, otherwise straight down at it.
         tail_center_x = self.width() / 2
-        tail_top_y = body_height - 1  # slight overlap so the join is seamless
         tail_path = QPainterPath()
-        tail_path.moveTo(tail_center_x - BUBBLE_TAIL_WIDTH_PX / 2, tail_top_y)
-        tail_path.lineTo(tail_center_x, body_height + BUBBLE_TAIL_HEIGHT_PX)
-        tail_path.lineTo(tail_center_x + BUBBLE_TAIL_WIDTH_PX / 2, tail_top_y)
+        if self._tail_on_top:
+            base_y = body_rect.top() + 1  # slight overlap so the join is seamless
+            tail_path.moveTo(tail_center_x - BUBBLE_TAIL_WIDTH_PX / 2, base_y)
+            tail_path.lineTo(tail_center_x, 0)
+            tail_path.lineTo(tail_center_x + BUBBLE_TAIL_WIDTH_PX / 2, base_y)
+        else:
+            base_y = body_rect.bottom() - 1
+            tail_path.moveTo(tail_center_x - BUBBLE_TAIL_WIDTH_PX / 2, base_y)
+            tail_path.lineTo(tail_center_x, self.height())
+            tail_path.lineTo(tail_center_x + BUBBLE_TAIL_WIDTH_PX / 2, base_y)
         tail_path.closeSubpath()
 
         # Flat, borderless fill for the soft comic look from the reference art.
@@ -207,8 +230,8 @@ class SpeechBubble(QWidget):
         painter.setBrush(BUBBLE_FILL_COLOR)
         painter.drawPath(bubble_path.united(tail_path))
 
-        self._draw_corner_accents(painter, body_height)
-        self._draw_corner_flowers(painter, body_height)
+        self._draw_corner_accents(painter, body_rect)
+        self._draw_corner_flowers(painter, body_rect)
 
         painter.setPen(BUBBLE_TEXT_COLOR)
         painter.setFont(self._font)
@@ -218,22 +241,22 @@ class SpeechBubble(QWidget):
         )
         painter.drawText(text_area, _TEXT_FLAGS, self._text)
 
-    def _draw_corner_flowers(self, painter: QPainter, body_height: float) -> None:
+    def _draw_corner_flowers(self, painter: QPainter, body_rect: QRectF) -> None:
         """Tuck a small daisy into the top-left and bottom-right body corners."""
         inset = FLOWER_CORNER_INSET_PX
         corners = (
-            QPointF(inset, inset),
-            QPointF(self.width() - inset, body_height - inset),
+            QPointF(inset, body_rect.top() + inset),
+            QPointF(self.width() - inset, body_rect.bottom() - inset),
         )
         for corner in corners:
             self._draw_flower(painter, corner)
 
-    def _draw_corner_accents(self, painter: QPainter, body_height: float) -> None:
+    def _draw_corner_accents(self, painter: QPainter, body_rect: QRectF) -> None:
         """Doodle a pair of sparkle dashes near the top-right/bottom-left corners."""
         inset = ACCENT_CORNER_INSET_PX
         anchors = (
-            QPointF(self.width() - inset, inset),
-            QPointF(inset, body_height - inset),
+            QPointF(self.width() - inset, body_rect.top() + inset),
+            QPointF(inset, body_rect.bottom() - inset),
         )
         for anchor in anchors:
             self._draw_accent_dashes(painter, anchor)
