@@ -39,6 +39,10 @@ Thumbs.db
 # Logs
 *.log
 
+# Backup copies (e.g. a *.bak snapshot of a local state file) — local only,
+# never shared.
+*.bak
+
 # Local app state (e.g. remembered panel positions, last morning-brief date) —
 # machine-specific, never shared
 panel_state.json
