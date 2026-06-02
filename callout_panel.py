@@ -398,12 +398,6 @@ class CalloutPanel(QWidget):
             return height // 2
         return int(height * self._background.width() / self._background.height())
 
-    def _height_for_width(self, width: int) -> int:
-        """Height that preserves the background image's aspect ratio for a width."""
-        if self._background.isNull() or self._background.width() == 0:
-            return width * 2
-        return int(width * self._background.height() / self._background.width())
-
     def _clamped_view_size(self, size: QSize, full_size: QSize) -> QSize:
         """Clamp a window size between the minimum and the full planner size."""
         min_w = int(full_size.width() * PANEL_MIN_VIEW_FRAC)
