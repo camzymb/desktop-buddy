@@ -22,7 +22,6 @@ import threading
 import webbrowser
 from datetime import datetime, timedelta
 from enum import Enum, auto
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 from PyQt6.QtCore import QLockFile, QStandardPaths, Qt, QTimer, pyqtSignal
@@ -41,7 +40,6 @@ from PyQt6.QtWidgets import QApplication, QLabel, QWidget
 from audio import SoundPlayer
 from calendar_sync import CalendarEvent, due_reminders, fetch_todays_events
 from callout_panel import CalloutPanel
-from callout_server import HOST, PORT, create_server
 from content_planner import build_weekly_plan, load_plan_payload, write_plan
 from draft_assistant import DraftBatch, draft_replies
 from draft_panel import DraftPanel
@@ -132,13 +130,7 @@ BUBBLE_HOLD_MS = 7000
 # Gap between the top of her head and the bottom (tail) of the speech bubble.
 BUBBLE_GAP_ABOVE_HEAD_PX = 6
 
-# --- Daily summary callout ---
-
-# Pressing "C" opens the callout in the default browser. The callout server
-# serves the callout/ folder as its root, so the page lives at the server
-# root; the URL is built from the server's host/port to stay in sync.
-CALLOUT_URL = f"http://{HOST}:{PORT}/"
-CALLOUT_OPEN_FAILED_MESSAGE = "I couldn't open your daily summary — sorry! 🤍"
+# --- Daily summary panel ---
 
 # Pressing "P" pops the daily-summary panel out of the buddy and parks it
 # against the left edge; pressing it again retracts it. The panel fetches real
@@ -952,20 +944,7 @@ class BuddyOverlay(QWidget):
         screen_mid_x = (min_x + max_x) / 2
         return max_x if self._feet_x < screen_mid_x else min_x
 
-    # --- callout ---
-
-    def _open_callout(self) -> None:
-        """Open the daily summary callout in the user's default web browser.
-
-        If no browser can be opened, she shows a friendly message instead of
-        the app crashing.
-        """
-        try:
-            opened = webbrowser.open(CALLOUT_URL)
-        except OSError:
-            opened = False
-        if not opened:
-            self._begin_talking(CALLOUT_OPEN_FAILED_MESSAGE, play_voice=False)
+    # --- daily-summary panel ---
 
     def _toggle_panel(self) -> None:
         """Pop the daily-summary panel out of the buddy, or retract it if open.
@@ -1340,11 +1319,11 @@ class BuddyOverlay(QWidget):
     # --- input ---
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
-        """Handle keys: Escape closes; Space talks; C opens the browser summary; P pops the panel; G replays the greeting; B re-shows today's brief; D drafts email replies; R previews a reminder; W reopens/minimizes the plan panel.
+        """Handle keys: Escape closes; Space talks; P pops the panel; G replays the greeting; B re-shows today's brief; D drafts email replies; R previews a reminder; W reopens/minimizes the plan panel.
 
         All require the overlay to hold keyboard focus — clicking the buddy
-        gives it focus. Spacebar triggers the same talk as the timer; "C" opens
-        the callout in the default browser; "P" toggles the daily-summary panel;
+        gives it focus. Spacebar triggers the same talk as the timer; "P"
+        toggles the daily-summary panel;
         "G" replays the startup greeting + panel; "B" re-shows today's morning
         brief on demand (re-fetching live weather, without affecting tomorrow's
         automatic one); "D" reads today's important emails (read-only) and drafts
@@ -1356,8 +1335,6 @@ class BuddyOverlay(QWidget):
             self.close()
         elif event.key() == Qt.Key.Key_Space:
             self._begin_talking()
-        elif event.key() == Qt.Key.Key_C:
-            self._open_callout()
         elif event.key() == Qt.Key.Key_P:
             self._toggle_panel()
         elif event.key() == Qt.Key.Key_G:
@@ -1376,25 +1353,6 @@ class BuddyOverlay(QWidget):
 
 # === ENTRY POINT ===
 
-def _start_callout_server() -> ThreadingHTTPServer | None:
-    """Start the callout web server on a background daemon thread.
-
-    Returns the running server so it can be shut down cleanly on exit, or None
-    if it couldn't bind (e.g. the port is already in use, meaning a server is
-    likely already running). Either way the buddy keeps working; the "C"
-    shortcut just opens whatever is serving that address. Using a daemon
-    thread — not a subprocess — means there is no separate process to orphan.
-    """
-    try:
-        server = create_server()
-    except OSError:
-        return None
-    threading.Thread(
-        target=server.serve_forever, name="callout-server", daemon=True
-    ).start()
-    return server
-
-
 def _acquire_single_instance_lock() -> QLockFile | None:
     """Take a per-user lock so only one buddy runs; return it, or None if taken.
 
@@ -1411,7 +1369,7 @@ def _acquire_single_instance_lock() -> QLockFile | None:
 
 
 def main() -> int:
-    """Boot the Qt event loop, start the callout server, and show the buddy.
+    """Boot the Qt event loop and show the buddy.
 
     We use showMaximized() rather than show() because on Wayland (COSMIC)
     the compositor decides window size and routinely ignores client size
@@ -1438,7 +1396,6 @@ def main() -> int:
         print("Desktop Buddy is already running — not starting another.")
         return 0
 
-    callout_server = _start_callout_server()
     overlay = BuddyOverlay(
         simulate_reminder=SIMULATE_REMINDER_FLAG in sys.argv,
         plan_week=PLAN_WEEK_FLAG in sys.argv,
@@ -1452,10 +1409,6 @@ def main() -> int:
     try:
         return app.exec()
     finally:
-        # Shut the server down so no thread or socket is left behind on exit.
-        if callout_server is not None:
-            callout_server.shutdown()
-            callout_server.server_close()
         instance_lock.unlock()
 
 

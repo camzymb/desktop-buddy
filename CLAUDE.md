@@ -11,8 +11,8 @@ playback, and presents a daily summary of calendar events. It runs as a transpar
 always-on-top overlay.
 
 **Tech stack:** Python 3, PyQt6 (overlay & rendering), pygame-ce (audio), Google Calendar API
-(read-only). A small HTML/CSS/JS module renders the daily-summary card. Planned: Claude API for
-dynamic messages and further context-aware reminders.
+(read-only). The daily summary is shown in a PyQt panel that pops out of the buddy. Planned:
+Claude API for dynamic messages and further context-aware reminders.
 
 ## Code Quality
 
@@ -53,8 +53,7 @@ This is a public repository. Source code is public; private data never is.
   `speech_bubble.py`, `audio.py`, `quotes.py`).
 - **Assets:** sprites in `sprites/`, sounds in `sounds/`, bundled fonts in `assets/fonts/`
   (with their licenses).
-- **Daily-summary UI:** `callout/` (standalone HTML/CSS/JS), served locally by
-  `callout_server.py`.
+- **Daily-summary UI:** `callout_panel.py` — a PyQt panel that pops out of the buddy.
 - **Secrets (gitignored):** `credentials.json`, `token.json`, `.env`.
 - **Environment:** a project-local virtualenv (`.venv/`); dependencies pinned in
   `requirements.txt`.
