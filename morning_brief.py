@@ -47,6 +47,11 @@ NUMBER_WORDS = {
     6: "Six", 7: "Seven", 8: "Eight", 9: "Nine", 10: "Ten",
 }
 
+# Only mention rain when it's high enough to actually plan around (grab an
+# umbrella) — below this the brief stays a warm note rather than a forecast
+# readout, so it skips the line. Lower it toward 0 to hear every chance.
+RAIN_MENTION_THRESHOLD_PCT = 20
+
 
 # === COMPOSITION ===
 
@@ -74,13 +79,29 @@ def compose_brief(
 
 
 def _weather_sentence(current_weather: weather.Weather) -> str:
-    """One line about the weather, e.g. "It's 3°C and cloudy in Oslo."."""
+    """One line about the weather, with a rain heads-up when an umbrella's worth it.
+
+    Builds up from the temperature: adds the sky word when there is one, and a
+    "chance of rain" clause only when the probability is both available and at or
+    above RAIN_MENTION_THRESHOLD_PCT. Examples:
+        "It's 19°C, cloudy, 60% chance of rain in Oslo."  (sky + worthwhile rain)
+        "It's 19°C and cloudy in Oslo."                   (no/low rain chance)
+        "It's 19°C in Oslo."                              (no sky word either)
+    """
+    pieces = [f"{current_weather.temperature_c}°C"]
     if current_weather.description:
-        return (
-            f"It's {current_weather.temperature_c}°C and "
-            f"{current_weather.description} in {current_weather.city}."
-        )
-    return f"It's {current_weather.temperature_c}°C in {current_weather.city}."
+        pieces.append(current_weather.description)
+    rain_chance = current_weather.precipitation_probability
+    if rain_chance is not None and rain_chance >= RAIN_MENTION_THRESHOLD_PCT:
+        pieces.append(f"{rain_chance}% chance of rain")
+
+    if len(pieces) == 1:
+        body = pieces[0]
+    elif len(pieces) == 2:
+        body = f"{pieces[0]} and {pieces[1]}"
+    else:
+        body = ", ".join(pieces)  # temp, sky, rain — comma-joined, e.g. "19°C, cloudy, 60% chance of rain"
+    return f"It's {body} in {current_weather.city}."
 
 
 def _calendar_sentence(events: list[calendar_sync.CalendarEvent]) -> str:
@@ -166,7 +187,9 @@ def mock_brief() -> str:
     Lets the wording, length, and tone be checked at zero cost before wiring the
     brief into the buddy's bubble and voice.
     """
-    sample_weather = weather.Weather(city="Oslo", temperature_c=3, description="cloudy")
+    sample_weather = weather.Weather(
+        city="Oslo", temperature_c=3, description="cloudy", precipitation_probability=60
+    )
     sample_events = [
         calendar_sync.CalendarEvent(
             title="Standup", start="10:00 AM", end="10:15 AM",

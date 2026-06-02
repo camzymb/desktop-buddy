@@ -38,6 +38,9 @@ GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search?name={city}&count=
 WEATHER_URL = (
     "https://api.open-meteo.com/v1/forecast"
     "?latitude={lat}&longitude={lon}&current=temperature_2m,weather_code"
+    # Rain chance only exists in the HOURLY forecast, not the current block, so
+    # we also pull today's hourly probabilities and read the current hour's.
+    "&hourly=precipitation_probability&forecast_days=1"
 )
 
 # WMO weather codes → short, gentle words for the brief. Unlisted codes fall
@@ -78,10 +81,12 @@ WEATHER_DESCRIPTIONS: dict[int, str] = {
 
 @dataclass(frozen=True)
 class Weather:
-    """Current weather, ready for display: city name, °C, and a short word."""
+    """Current weather, ready for display: city name, °C, a short sky word, and
+    the chance of rain (%) for the current hour (None when unavailable)."""
     city: str
     temperature_c: int
     description: str
+    precipitation_probability: int | None = None
 
 
 # === NETWORK HELPER ===
@@ -127,13 +132,40 @@ def _geocode_city(city: str) -> tuple[str, float, float] | None:
     return top.get("name", city), float(top["latitude"]), float(top["longitude"])
 
 
-def _current_weather(latitude: float, longitude: float) -> tuple[float, int] | None:
-    """Return (temperature_c, weather_code) for a location, or None."""
+def _current_weather(
+    latitude: float, longitude: float
+) -> tuple[float, int, int | None] | None:
+    """Return (temperature_c, weather_code, rain_chance_pct) for a place, or None.
+
+    The rain chance is the precipitation probability for the current hour; it's
+    None when that data isn't in the response, so the brief just leaves it off.
+    """
     data = _get_json(WEATHER_URL.format(lat=latitude, lon=longitude))
     current = (data or {}).get("current") or {}
     if "temperature_2m" not in current or "weather_code" not in current:
         return None
-    return float(current["temperature_2m"]), int(current["weather_code"])
+    rain_chance = _current_rain_chance(data, current.get("time"))
+    return float(current["temperature_2m"]), int(current["weather_code"]), rain_chance
+
+
+def _current_rain_chance(data: dict | None, current_time: str | None) -> int | None:
+    """Pull the precipitation probability (%) for the current hour, or None.
+
+    Open-Meteo reports rain chance only in the hourly forecast, so we match the
+    'current' timestamp to its hour and read that probability. Any gap in the
+    data (missing field, mismatched lengths, no matching hour, a null value)
+    yields None, and the brief omits the rain note rather than guessing.
+    """
+    hourly = (data or {}).get("hourly") or {}
+    times = hourly.get("time") or []
+    chances = hourly.get("precipitation_probability") or []
+    if not current_time or len(times) != len(chances):
+        return None
+    current_hour = current_time[:13]  # "YYYY-MM-DDTHH" — drop the minutes
+    for time_str, chance in zip(times, chances):
+        if isinstance(time_str, str) and time_str[:13] == current_hour and chance is not None:
+            return int(chance)
+    return None
 
 
 # === PUBLIC API ===
@@ -154,11 +186,12 @@ def get_weather(default_city: str) -> Weather | None:
     if reading is None:
         return None
 
-    temperature_c, weather_code = reading
+    temperature_c, weather_code, rain_chance = reading
     return Weather(
         city=city,
         temperature_c=round(temperature_c),
         description=WEATHER_DESCRIPTIONS.get(weather_code, ""),
+        precipitation_probability=rain_chance,
     )
 
 
@@ -170,10 +203,12 @@ def _print_weather() -> None:
     if current is None:
         print("Couldn't reach a weather service right now. 🤍")
         return
+    parts = [f"{current.temperature_c}°C"]
     if current.description:
-        print(f"{current.temperature_c}°C and {current.description} in {current.city}.")
-    else:
-        print(f"{current.temperature_c}°C in {current.city}.")
+        parts.append(current.description)
+    if current.precipitation_probability is not None:
+        parts.append(f"{current.precipitation_probability}% chance of rain")
+    print(f"{', '.join(parts)} in {current.city}.")
 
 
 if __name__ == "__main__":

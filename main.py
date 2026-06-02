@@ -541,7 +541,7 @@ class BuddyOverlay(QWidget):
             # the morning brief stands in for the plain welcome-back greeting.
             # Order matters — a test flag short-circuits before _claim_todays_brief
             # so forcing the brief never consumes the real once-a-day marker.
-            QTimer.singleShot(STARTUP_GREETING_DELAY_MS, self._run_morning_brief)
+            QTimer.singleShot(STARTUP_GREETING_DELAY_MS, self._deliver_startup_brief)
         else:
             self._startup_timer.start(STARTUP_GREETING_DELAY_MS)
 
@@ -971,16 +971,29 @@ class BuddyOverlay(QWidget):
         return True
 
     def _run_morning_brief(self) -> None:
-        """Gather the brief in the background, then speak it; open the post-it too.
+        """Gather today's brief in the background and speak it in her bubble.
 
-        Gathering touches the network (weather + calendar + Gmail), so it runs off
-        the GUI thread to keep her from freezing mid-step; the composed words come
-        back via the brief_ready signal (see _on_brief_ready). The post-it opens a
-        beat later, exactly as it does after the normal welcome-back greeting.
+        The reusable core shared by the first-launch auto-brief and the manual
+        "B" key. Gathering touches the network (weather + calendar + Gmail), so it
+        runs off the GUI thread to keep her from freezing mid-step; the composed
+        words come back via the brief_ready signal (see _on_brief_ready), with a
+        fresh weather/calendar/email fetch each time it's called. It deliberately
+        never touches the once-a-day marker, so pressing "B" any number of times
+        today has no effect on tomorrow's automatic morning brief — only the
+        first-launch path (_claim_todays_brief) ever claims the day.
         """
         threading.Thread(
             target=self._gather_brief_worker, name="morning-brief", daemon=True
         ).start()
+
+    def _deliver_startup_brief(self) -> None:
+        """First-launch path: speak the brief and auto-open the post-it.
+
+        Wraps the shared brief core with the post-it pop the normal welcome-back
+        greeting also does, so the day's first brief shows the card too. The
+        manual "B" key calls the core alone — bubble and voice only, no panel.
+        """
+        self._run_morning_brief()
         self._startup_panel_timer.start(STARTUP_PANEL_DELAY_MS)
 
     def _gather_brief_worker(self) -> None:
@@ -1187,14 +1200,16 @@ class BuddyOverlay(QWidget):
     # --- input ---
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
-        """Handle keys: Escape closes; Space talks; C opens the browser summary; P pops the panel; G replays the greeting; R previews a reminder; W minimizes the plan panel.
+        """Handle keys: Escape closes; Space talks; C opens the browser summary; P pops the panel; G replays the greeting; B re-shows today's brief; R previews a reminder; W minimizes the plan panel.
 
         All require the overlay to hold keyboard focus — clicking the buddy
         gives it focus. Spacebar triggers the same talk as the timer; "C" opens
         the callout in the default browser; "P" toggles the daily-summary panel;
-        "G" replays the startup greeting + panel; "R" previews an event reminder
-        (bubble + post-it) without waiting for a real calendar event; "W"
-        minimizes/maximizes the weekly-plan panel.
+        "G" replays the startup greeting + panel; "B" re-shows today's morning
+        brief on demand (re-fetching live weather, without affecting tomorrow's
+        automatic one); "R" previews an event reminder (bubble + post-it) without
+        waiting for a real calendar event; "W" minimizes/maximizes the
+        weekly-plan panel.
         """
         if event.key() == Qt.Key.Key_Escape:
             self.close()
@@ -1206,6 +1221,8 @@ class BuddyOverlay(QWidget):
             self._toggle_panel()
         elif event.key() == Qt.Key.Key_G:
             self._run_startup_greeting()
+        elif event.key() == Qt.Key.Key_B:
+            self._run_morning_brief()
         elif event.key() == Qt.Key.Key_R:
             self._simulate_reminder()
         elif event.key() == Qt.Key.Key_W:
