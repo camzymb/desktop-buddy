@@ -43,6 +43,7 @@ from PyQt6.QtWidgets import (
     QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -82,9 +83,20 @@ PINK_SOFT = "#ffd7e3"
 TEXT = "#6e4b4b"
 TEXT_SOFT = "#a98a8a"
 
-# Header text when expanded vs. minimized (the chevron hints which way it goes).
-CHEVRON_OPEN = "⌄"
-CHEVRON_CLOSED = "›"
+# Window-control buttons in the header (browser/OS style), shown top-right.
+# Glyphs are kept simple so they render in the bundled font (a system font
+# fills in otherwise); the maximize glyph flips to the restore glyph while
+# maximized. Maximize is only shown on resizable cards (nothing to grow into
+# on a fixed-size card).
+CONTROL_BUTTON_SIZE_PX = 18
+MINIMIZE_GLYPH = "–"
+MAXIMIZE_GLYPH = "□"
+RESTORE_GLYPH = "❐"
+CLOSE_GLYPH = "✕"
+
+# A maximized (resizable) card grows to this share of the overlay height, at its
+# current width — most of the screen, with a little breathing room top and bottom.
+MAXIMIZE_HEIGHT_FRACTION = 0.95
 
 # Family the bundled font registers as, resolved once on first construction.
 _loaded_font_family: str | None = None
@@ -143,6 +155,11 @@ class CardPanel(QWidget):
             self._resize_edges: tuple[bool, bool, bool, bool] = (False, False, False, False)
             self._resize_start_rect = QRect()
             self._resize_start_mouse = QPoint()
+            # Maximize/restore: _maximized tracks the toggle; _restore_size is the
+            # size to return to when un-maximizing. Both default here and may be
+            # overridden by the saved state loaded just below.
+            self._maximized = False
+            self._restore_size = self._default_size()
 
         # Saved position (and size, when resizable) is remembered across launches.
         self._saved_top_left, self._saved_size = self._load_saved_state()
@@ -185,6 +202,10 @@ class CardPanel(QWidget):
         card_layout.addWidget(self._build_header())
         card_layout.addWidget(self._build_body(), self._body_stretch_factor())
 
+        if self._resizable:
+            # Reflect any restored "maximized" state on the button's glyph/tooltip.
+            self._update_maximize_button()
+
     def _build_header(self) -> QFrame:
         """The pink title bar — the drag handle and minimize/maximize toggle."""
         self._header = QFrame(self._card)
@@ -195,20 +216,54 @@ class CardPanel(QWidget):
             self._header.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
 
         row = QHBoxLayout(self._header)
-        row.setContentsMargins(14, 9, 12, 9)
+        # Vertical margins match the old header so its height is unchanged; the
+        # right margin is trimmed a touch to seat the control buttons near the edge.
+        row.setContentsMargins(14, 9, 10, 9)
+        row.setSpacing(6)
         title = QLabel(self._title, self._header)
         title.setObjectName("title")
         # A small per-card status line (e.g. the week label, or "3 ready").
         self._status_label = QLabel("", self._header)
         self._status_label.setObjectName("status")
-        self._chevron = QLabel(CHEVRON_OPEN, self._header)
-        self._chevron.setObjectName("chevron")
 
         row.addWidget(title)
         row.addStretch(1)
         row.addWidget(self._status_label)
-        row.addWidget(self._chevron)
+        self._add_control_buttons(row)
         return self._header
+
+    def _add_control_buttons(self, row: QHBoxLayout) -> None:
+        """Add the top-right window controls: minimize, maximize (resizable), close."""
+        self._minimize_button = self._make_control_button(
+            "minimizeBtn", MINIMIZE_GLYPH, "Minimize", self.toggle_minimized
+        )
+        row.addWidget(self._minimize_button)
+        if self._resizable:
+            self._maximize_button = self._make_control_button(
+                "maximizeBtn", MAXIMIZE_GLYPH, "Maximize", self._toggle_maximized
+            )
+            row.addWidget(self._maximize_button)
+        self._close_button = self._make_control_button(
+            "closeBtn", CLOSE_GLYPH, "Close", self._close_panel
+        )
+        row.addWidget(self._close_button)
+
+    def _make_control_button(
+        self, object_name: str, glyph: str, tooltip: str, handler: Callable[[], None]
+    ) -> QPushButton:
+        """Build one small flat header control button wired to its handler.
+
+        Buttons are real widgets, so a click lands on the button and is consumed
+        there — it never reaches the header's drag/minimize handling beneath it.
+        """
+        button = QPushButton(glyph, self._header)
+        button.setObjectName(object_name)
+        button.setToolTip(tooltip)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setFixedSize(CONTROL_BUTTON_SIZE_PX, CONTROL_BUTTON_SIZE_PX)
+        button.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # don't steal the overlay's key focus
+        button.clicked.connect(lambda _checked=False: handler())
+        return button
 
     def _shadow(self) -> QGraphicsDropShadowEffect:
         """A soft pink drop shadow for a gentle 3-D lift."""
@@ -231,7 +286,13 @@ class CardPanel(QWidget):
             #header {{ background: {PINK_HEADER}; border-radius: {header_radius}; }}
             #title {{ color: #ffffff; font-size: 13px; font-weight: 600; }}
             #status {{ color: #fff3f7; font-size: 10px; }}
-            #chevron {{ color: #ffffff; font-size: 13px; font-weight: 600; }}
+            #minimizeBtn, #maximizeBtn, #closeBtn {{
+                    color: #ffffff; font-size: 12px; font-weight: 600;
+                    background: transparent; border: none; border-radius: 5px;
+                    padding: 0; }}
+            #minimizeBtn:hover, #maximizeBtn:hover {{
+                    background: rgba(255, 255, 255, 0.30); }}
+            #closeBtn:hover {{ background: #e8849c; }}
         """
         return base + self._content_stylesheet()
 
@@ -277,7 +338,6 @@ class CardPanel(QWidget):
     def toggle_minimized(self) -> None:
         """Collapse to just the header, or expand back to the full card."""
         self._minimized = not self._minimized
-        self._chevron.setText(CHEVRON_CLOSED if self._minimized else CHEVRON_OPEN)
         if self._resizable:
             if self._minimized:
                 # Remember the expanded size, hide the body, shrink to the header
@@ -302,6 +362,54 @@ class CardPanel(QWidget):
     def is_open(self) -> bool:
         """True while the card is on screen (expanded or minimized)."""
         return self.isVisible()
+
+    # --- window controls (header buttons) ---
+
+    def _close_panel(self) -> None:
+        """Hide the card (the ✕ button). Its owner's key shortcut reopens it."""
+        self.hide()
+        self._on_geometry_change()
+
+    def _toggle_maximized(self) -> None:
+        """Toggle a resizable card between its restore size and a tall maximized size.
+
+        Maximizing grows the card to most of the overlay height at its current
+        width; restoring returns it to the size it had beforehand. The state and
+        the restore size are remembered alongside the position/size already saved.
+        """
+        if self._minimized:
+            # Expand first so maximize acts on the full card, not the header stub.
+            self.toggle_minimized()
+        if not self._maximized:
+            self._restore_size = self.size()
+            self._maximized = True
+            self.resize(self._maximized_size())
+        else:
+            self._maximized = False
+            self.resize(self._clamped_size(self._restore_size))
+        self._expanded_size = self.size()
+        self._saved_size = self.size()
+        self._update_maximize_button()
+        self._clamp_into_parent()
+        self._save_state()
+        self._on_geometry_change()
+
+    def _maximized_size(self) -> QSize:
+        """The size a maximized card grows to: most of the overlay, current width."""
+        parent = self.parentWidget()
+        height = self.height() if parent is None else int(parent.height() * MAXIMIZE_HEIGHT_FRACTION)
+        return self._clamped_size(QSize(self.width(), height))
+
+    def _update_maximize_button(self) -> None:
+        """Show the right glyph/tooltip for the maximize button's current state."""
+        if not self._resizable:
+            return
+        if self._maximized:
+            self._maximize_button.setText(RESTORE_GLYPH)
+            self._maximize_button.setToolTip("Restore")
+        else:
+            self._maximize_button.setText(MAXIMIZE_GLYPH)
+            self._maximize_button.setToolTip("Maximize")
 
     # --- interaction ---
 
@@ -357,6 +465,10 @@ class CardPanel(QWidget):
                 self._saved_size = self.size()
                 self._expanded_size = self.size()
                 self._saved_top_left = self.pos()
+                # A manual resize means the user has taken size into their own
+                # hands, so we're no longer in the "maximized" state.
+                self._maximized = False
+                self._update_maximize_button()
                 self._save_state()
             return
         if hasattr(self, "_press_pos"):
@@ -509,15 +621,25 @@ class CardPanel(QWidget):
                     size = None
             except (KeyError, TypeError, ValueError):
                 size = None
+            self._maximized = bool(data.get("maximized", False))
+            try:
+                restore = QSize(int(data["restore_w"]), int(data["restore_h"]))
+                if restore.width() > 0 and restore.height() > 0:
+                    self._restore_size = restore
+            except (KeyError, TypeError, ValueError):
+                pass
         return point, size
 
     def _save_state(self) -> None:
-        """Persist the current position (and size, if resizable); best-effort only."""
+        """Persist the current position (and size + maximize state, if resizable)."""
         rect = self.geometry()
         data = {"x": rect.x(), "y": rect.y()}
         if self._resizable:
             data["w"] = rect.width()
             data["h"] = rect.height()
+            data["maximized"] = self._maximized
+            data["restore_w"] = self._restore_size.width()
+            data["restore_h"] = self._restore_size.height()
         try:
             self._state_path.write_text(json.dumps(data), encoding="utf-8")
         except OSError:

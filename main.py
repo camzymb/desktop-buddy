@@ -394,6 +394,9 @@ class BuddyOverlay(QWidget):
         self._callout_panel.set_note(PANEL_NOTE)
         # Compact weekly-plan overview card; links to the full plan in Notion.
         self._plan_panel = PlanPanel(self, self._update_input_mask, self._open_notion)
+        # True once the plan card has real content, so its key can reopen it after
+        # the ✕ button closes it — without ever popping an empty "no plan yet" card.
+        self._plan_has_content = False
         # Draft-replies card; each draft's button opens a prefilled Gmail compose.
         self._draft_panel = DraftPanel(self, self._update_input_mask, self._open_draft)
         self._sound_player = SoundPlayer(SOUNDS_DIR)
@@ -1133,6 +1136,7 @@ class BuddyOverlay(QWidget):
             for piece in pieces
         ]
         self._plan_panel.set_overview(plan.get("week_of", ""), rows)
+        self._plan_has_content = True
         if self._plan_panel.is_open:
             self._plan_panel.raise_()
             self._update_input_mask()
@@ -1160,9 +1164,15 @@ class BuddyOverlay(QWidget):
         self._begin_talking(message, play_voice=False)
 
     def _toggle_plan_panel(self) -> None:
-        """Minimize/maximize the plan panel if it's on screen (the 'W' key)."""
+        """The 'W' key: reopen the plan card if closed, else minimize/restore it.
+
+        Reopening only happens once a plan has actually been loaded, so pressing
+        'W' on a fresh launch with nothing planned never pops an empty card.
+        """
         if self._plan_panel.is_open:
             self._plan_panel.toggle_minimized()
+        elif self._plan_has_content:
+            self._plan_panel.show_panel()
 
     def _open_notion(self) -> None:
         """Open the full plan in Notion (the panel's link), with friendly fallbacks."""
@@ -1323,7 +1333,7 @@ class BuddyOverlay(QWidget):
     # --- input ---
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
-        """Handle keys: Escape closes; Space talks; C opens the browser summary; P pops the panel; G replays the greeting; B re-shows today's brief; D drafts email replies; R previews a reminder; W minimizes the plan panel.
+        """Handle keys: Escape closes; Space talks; C opens the browser summary; P pops the panel; G replays the greeting; B re-shows today's brief; D drafts email replies; R previews a reminder; W reopens/minimizes the plan panel.
 
         All require the overlay to hold keyboard focus — clicking the buddy
         gives it focus. Spacebar triggers the same talk as the timer; "C" opens
@@ -1333,7 +1343,7 @@ class BuddyOverlay(QWidget):
         automatic one); "D" reads today's important emails (read-only) and drafts
         a reply for each to review and send herself; "R" previews an event
         reminder (bubble + post-it) without waiting for a real calendar event;
-        "W" minimizes/maximizes the weekly-plan panel.
+        "W" reopens the weekly-plan panel when closed, otherwise minimizes/restores it.
         """
         if event.key() == Qt.Key.Key_Escape:
             self.close()
