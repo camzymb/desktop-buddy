@@ -6,7 +6,7 @@ top in its sections:
 
   * the date,
   * today's real Google Calendar events (via calendar_sync),
-  * a Must-Do list and Top 3 Goals (placeholder items for now), and
+  * a Must-Do list and Top 3 Goals (a fixed default set of items), and
   * a short note from the buddy.
 
 Events and checklist items are click-to-toggle: clicking one strikes it through
@@ -252,9 +252,10 @@ class CalloutPanel(QWidget):
     """The pixel-art daily-summary panel that pops out from the buddy.
 
     It paints the planner artwork as a background and overlays today's date,
-    live calendar events, placeholder checklists, and a note. Rows are click-to-
-    toggle (strike-through + fade). The widget animates its own geometry between
-    a small seed near the buddy and a slot pinned to the left edge; the owner's
+    live calendar events, a fixed default set of checklist items, and a note.
+    Rows are click-to-toggle (strike-through + fade). The widget animates its own
+    geometry between a small seed near the buddy and a slot pinned to the left
+    edge; the owner's
     `on_geometry_change` callback fires each frame so the overlay can keep its
     click-through mask in sync.
     """
@@ -323,7 +324,7 @@ class CalloutPanel(QWidget):
     # --- public API ---
 
     def set_checklists(self, must_do: list[str], goals: list[str]) -> None:
-        """Set the placeholder Must-Do and Top 3 Goals items (all start undone)."""
+        """Set the Must-Do and Top 3 Goals checklist items (all start undone)."""
         self._must_do = [ChecklistItem(label) for label in must_do[:MUSTDO_MAX_ITEMS]]
         self._goals = [ChecklistItem(label) for label in goals[:GOALS_MAX_ITEMS]]
         self.update()

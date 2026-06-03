@@ -97,8 +97,9 @@ BUBBLE_GAP_ABOVE_HEAD_PX = 6
 
 # Pressing "P" pops the daily-summary panel out of the buddy and parks it
 # against the left edge; pressing it again retracts it. The panel fetches real
-# calendar events itself; the Must-Do/Goals lists are placeholders for now
-# (working checkboxes), and the note is a fixed warm message.
+# calendar events itself; the Must-Do/Goals lists are a fixed default set (the
+# checkboxes toggle, but the items themselves don't change), and the note is a
+# fixed warm message.
 PANEL_MUST_DO_ITEMS: tuple[str, ...] = (
     "Reply to messages",
     "Finish portfolio section",

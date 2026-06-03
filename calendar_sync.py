@@ -10,8 +10,9 @@ saved sign-in lives in `token.json`; both are gitignored and their contents
 are never printed. On first run a browser consent flow creates `token.json`;
 later runs reuse it and refresh silently when it expires.
 
-This is a standalone module for now — run it directly to print today's events
-and confirm calendar access before it gets wired into the app:
+The daily-summary panel, the buddy's event reminders, and the Morning Brief all
+use this module; you can also run it directly to print today's events and
+confirm calendar access:
 
     .venv/bin/python calendar_sync.py
 """

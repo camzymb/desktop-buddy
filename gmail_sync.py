@@ -14,8 +14,8 @@ gitignored and their contents are never printed. On first run a browser consent
 flow creates `token_gmail.json`; later runs reuse it and refresh silently when
 it expires.
 
-This is a standalone test for now — run it directly to confirm Gmail access
-before it gets wired into the Morning Brief:
+The Morning Brief and the draft assistant both use this module; you can also
+run it directly to confirm Gmail access:
 
     .venv/bin/python gmail_sync.py
 """

@@ -64,7 +64,7 @@ def main() -> int:
     stacking order, so WindowStaysOnTopHint is only a hint COSMIC may ignore.
     If the buddy still gets buried behind other windows, the robust fix is
     the wlr/ext layer-shell protocol (via the layer-shell-qt plugin), which
-    stock PyQt6 does not expose — a larger change left for a later chunk.
+    stock PyQt6 does not expose — a larger change not yet implemented.
     """
     # Configure logging before anything else can fail, so early problems land in
     # the log file. Quiet console by default; BUDDY_LOG_LEVEL=DEBUG for verbose.
