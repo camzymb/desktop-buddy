@@ -9,10 +9,19 @@ are read here and passed into the overlay.
 # === IMPORTS ===
 
 import logging
+import os
+import signal
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import QLockFile, QStandardPaths
+# SDL (pulled in by pygame for audio) otherwise installs its own SIGTERM/SIGINT
+# handlers that merely post a quit event onto *SDL's* event queue. Since we run
+# Qt's event loop and never pump SDL's, that event is never read and the signal
+# is silently swallowed — the process can only be SIGKILLed. Opt out so we can
+# handle these signals ourselves (below). Must be set before pygame is imported.
+os.environ.setdefault("SDL_NO_SIGNAL_HANDLERS", "1")
+
+from PyQt6.QtCore import QLockFile, QStandardPaths, QTimer
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
 
@@ -84,6 +93,24 @@ def main() -> int:
         logger.info("Another buddy is already running; exiting.")
         print("Desktop Buddy is already running — not starting another.")
         return 0
+
+    # Exit cleanly on SIGTERM/SIGINT (e.g. logout, `kill`, Ctrl-C): ask Qt to
+    # quit so the event loop unwinds and the finally block below runs (lock
+    # released, exit logged) instead of the process being hard-killed.
+    def _request_quit(signum: int, _frame: object) -> None:
+        logger.info("Received %s; shutting down.", signal.Signals(signum).name)
+        app.quit()
+
+    signal.signal(signal.SIGTERM, _request_quit)
+    signal.signal(signal.SIGINT, _request_quit)
+
+    # Qt's C++ event loop doesn't return to the Python interpreter between
+    # events, so a pending Python signal handler can sit unrun. A periodic
+    # no-op timer hands control back to Python a few times a second so the
+    # handler above fires promptly.
+    signal_timer = QTimer()
+    signal_timer.timeout.connect(lambda: None)
+    signal_timer.start(200)
 
     overlay = BuddyOverlay(
         simulate_reminder=SIMULATE_REMINDER_FLAG in sys.argv,
