@@ -44,6 +44,21 @@ python3 -m venv .venv
 
 To have her greet you automatically at login, run `scripts/setup_autostart.sh`.
 
+## ⌨️ Keyboard shortcuts
+
+**Click the buddy first** so she has keyboard focus, then:
+
+| Key | What it does |
+| --- | --- |
+| `Space` | Say something — a spontaneous little message, the same one the timer gives |
+| `P` | Toggle the daily-summary post-it panel |
+| `G` | Replay the welcome-back greeting (and panel) |
+| `B` | Re-show today's morning brief — re-fetches live weather, without touching tomorrow's automatic one |
+| `D` | Read today's important emails (read-only) and draft a reply for each to review |
+| `R` | Preview an event reminder (bubble + post-it) without waiting for a real event |
+| `W` | Reopen the weekly-plan panel, or minimize/restore it if it's already open |
+| `Esc` | Close the buddy |
+
 ## 🗓️ Weekly content planner
 
 She can also act as a gentle **content strategist**: she researches what's
